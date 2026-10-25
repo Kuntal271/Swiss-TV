@@ -33,6 +33,9 @@ A() { adb -s "$S" shell "$@"; }
 
 if [[ "${UNDO:-}" == "1" ]]; then
   say "Giving Home back to Google TV"
+  A pm enable com.google.android.apps.tv.launcherx >/dev/null 2>&1 && ok "re-enabled Google TV Home" || true
+  A pm enable com.google.android.tungsten.setupwraith >/dev/null 2>&1 && ok "re-enabled setup wizard" || true
+  A cmd role remove-role-holder --user 0 android.app.role.HOME "$PKG" >/dev/null 2>&1 || true
   A cmd package set-home-activity com.google.android.apps.tv.launcherx/.home.HomeActivity || true
   for p in $BLOAT; do A pm enable "$p" >/dev/null 2>&1 && ok "re-enabled $p" || true; done
   A settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
@@ -99,8 +102,16 @@ say "Compiling the Home path ahead of time (speed-profile)"
 A cmd package compile -m speed-profile -f "$PKG" >/dev/null && ok "compiled"
 
 say "Setting Home"
+# Google TV Home outranks any third-party Home, and the setup wizard's RecoveryActivity
+# takes over when it is gone, so both are disabled (UNDO=1 re-enables them).
+# GOOGLE_HOME=keep leaves them alone and relies on the accessibility fallback instead.
+if [[ "${GOOGLE_HOME:-off}" != "keep" ]]; then
+  A pm disable-user --user 0 com.google.android.apps.tv.launcherx >/dev/null 2>&1 && ok "Google TV Home disabled"
+  A pm disable-user --user 0 com.google.android.tungsten.setupwraith >/dev/null 2>&1 && ok "setup-wizard recovery Home disabled"
+fi
+A cmd role add-role-holder --user 0 android.app.role.HOME "$PKG" >/dev/null 2>&1 || true
 A cmd package set-home-activity "$HOME_ACT" >/dev/null 2>&1 || true
-CUR="$(A cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -1 | tr -d '\r')"
+CUR="$(A cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME | grep '/' | head -1 | tr -d '\r ')"
 if [[ "$CUR" == "$HOME_ACT" || "$CUR" == "$PKG/$PKG.MainActivity" ]]; then
   ok "Home button opens Swiss Home"
   A settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
