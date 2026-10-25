@@ -45,7 +45,9 @@ import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Footer
 import com.swissdark.launcher.core.design.Frame
 import com.swissdark.launcher.core.design.Header
-import com.swissdark.launcher.core.design.IconTile
+import com.swissdark.launcher.core.design.AppTile
+import com.swissdark.launcher.core.design.NavChip
+import com.swissdark.launcher.core.design.TDraw
 import com.swissdark.launcher.core.design.Initial
 import com.swissdark.launcher.core.design.KeyHint
 import com.swissdark.launcher.core.design.Label
@@ -308,14 +310,14 @@ fun SearchScreen(
                 Box(Modifier.fillMaxWidth().enter({ bodyIn.value }, dy = 0f)) {
                     when (mode) {
                         0 -> StartBody(focus, recentShown, trendShown, daily, hasTmdb)
-                        1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb)
+                        1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb, hasTmdb)
                         else -> ResultsBody(focus, filter, filtered, people, myServiceNames, browse != null && browseHits.isEmpty(), error)
                     }
                 }
                 Box(Modifier.weight(1f))
                 when (mode) {
                     0 -> Footer(
-                        if (hasTmdb) "Titles and artwork: TMDB · Where to watch: JustWatch" else "Add a TMDB key (setup.sh) for titles, trending and where to watch",
+                        if (hasTmdb) "Titles and artwork: TMDB · Where to watch: JustWatch" else "",
                         listOf(KeyHint("Hold OK", "Remove recent"), KeyHint("Back", "Home")),
                     )
                     1 -> Footer("No ads, no services you don’t use", listOf(KeyHint("Hold mic", "Google Assistant"), KeyHint("Back", "Clear")))
@@ -331,13 +333,7 @@ fun SearchScreen(
 
 @Composable
 private fun MicLabel(focus: FocusScreenState, listening: Boolean) {
-    val focused by remember(focus, 1) { focus.isFocused(1) }
-    T(
-        if (listening) "Mic on" else "Mic",
-        SwissType.Footer,
-        Modifier.focusItem(focus, 1, FocusStyle.SELF).let { if (focused) it.bottomRule(3.dp, Swiss.Focus) else it },
-        Swiss.Focus,
-    )
+    NavChip(focus, 1, "mic", if (listening) "Mic on" else "Mic")
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -345,13 +341,13 @@ private fun MicLabel(focus: FocusScreenState, listening: Boolean) {
 private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, trending: List<SearchHit.Title>, daily: Boolean, hasTmdb: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
         Column(Modifier.width(Swiss.span(4)), verticalArrangement = Arrangement.spacedBy(28.dp)) {
-            Column {
+            // Sections without data are left out.
+            if (recent.isNotEmpty()) Column {
                 Label("Recent", Modifier.padding(bottom = 12.dp))
-                if (recent.isEmpty()) T("Searches you make show up here.", SwissType.Body22)
                 for ((k, r) in recent.withIndex()) {
-                    RuleRow(focus, 2 + k, bottomRule = k == recent.lastIndex, vertical = 16.dp) { f ->
-                        T(r.query, SwissType.Row32, Modifier.weight(1f), if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
-                        T(r.kind, SwissType.Meta)
+                    RuleRow(focus, 2 + k, bottomRule = k == recent.lastIndex, vertical = 16.dp) { c ->
+                        TDraw(r.query, SwissType.Row32, c.ink, Modifier.weight(1f), maxLines = 1)
+                        TDraw(r.kind, SwissType.Meta, c.muted, maxLines = 1)
                     }
                 }
             }
@@ -363,21 +359,22 @@ private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, t
             }
         }
         val base = 2 + recent.size + genres.size
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(36.dp)) {
-                Label("Trending worldwide", color = Swiss.Focus)
-                TabText(focus, base, "This week", !daily, SwissType.Tile22, underline = 3.dp)
-                TabText(focus, base + 1, "Today", daily, SwissType.Tile22, underline = 3.dp)
+        // Trending appears once it has loaded; without TMDB it is simply not there.
+        val shown = rememberAppear(trending.isNotEmpty(), Motion.MEDIUM)
+        if (hasTmdb && trending.isNotEmpty()) Column(Modifier.weight(1f).enter({ shown.value }, dy = 0f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Label("Trending worldwide", color = Swiss.Ink)
+                TabText(focus, base, "This week", !daily, SwissType.Tile)
+                TabText(focus, base + 1, "Today", daily, SwissType.Tile)
                 Box(Modifier.weight(1f))
-                T("Amber square = on your services", SwissType.Meta18)
+                ServiceDot("On your services", true)
             }
-            if (trending.isEmpty()) T(if (hasTmdb) "Loading trending…" else "Trending needs a TMDB key. Run setup.sh with TMDB_KEY=…", SwissType.Body22)
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 for ((k, t) in trending.withIndex()) {
                     val (line, mine) = t.serviceLine()
                     PosterCard(
                         focus, base + 2 + k, t.posterUrl, 290.dp, t.ref.name, t.meta, Modifier.weight(1f),
-                        titleStyle = SwissType.Card24, metaStyle = SwissType.Meta18, gap = 10.dp, decodeW = 228, decodeH = 342,
+                        titleStyle = SwissType.Card, metaStyle = SwissType.Meta, gap = 10.dp, decodeW = 228, decodeH = 342,
                     ) { ServiceDot(if (mine) line.substringAfter(" · ") else line, mine) }
                 }
                 repeat(5 - trending.size) { Box(Modifier.weight(1f)) }
@@ -387,25 +384,31 @@ private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, t
 }
 
 @Composable
-private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: List<SearchHit.Title>, loading: Boolean) {
+private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: List<SearchHit.Title>, loading: Boolean, hasTmdb: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
-        Column(Modifier.width(Swiss.span(4)), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.width(Swiss.span(4)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Label("Apps · ${apps.size}")
-            for ((k, a) in apps.withIndex()) IconTile(focus, 2 + k, a.icon, a.label, 120.dp, Modifier.fillMaxWidth(), style = SwissType.Card, iconSize = 40.dp)
+            for (r in 0 until (apps.size + 1) / 2) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                for (c in 0 until 2) {
+                    val k = r * 2 + c
+                    val a = apps.getOrNull(k)
+                    if (a == null) Box(Modifier.weight(1f)) else AppTile(focus, 2 + k, a.id.component, a.icon, a.label, Modifier.weight(1f))
+                }
+            }
         }
         Box(Modifier.width(Swiss.span(1)))
-        Column(Modifier.weight(1f)) {
+        if (hasTmdb || titles.isNotEmpty()) Column(Modifier.weight(1f)) {
             Label("Titles · only on services you pay for", Modifier.padding(bottom = 14.dp))
-            if (titles.isEmpty()) T(if (loading) "Looking…" else "Nothing on your services yet.", SwissType.Body22)
+            if (titles.isEmpty()) T(if (loading) "Looking…" else "Nothing on your services yet.", SwissType.Body)
             val arrived = rememberAppear(titles.isNotEmpty(), Motion.MEDIUM)
             Column(Modifier.enter({ arrived.value }, dy = 0f)) {
             for ((k, t) in titles.withIndex()) {
-                RuleRow(focus, 2 + apps.size + k, vertical = 16.dp) { f ->
+                RuleRow(focus, 2 + apps.size + k, vertical = 16.dp) { c ->
                     Art(t.backdropUrl ?: t.posterUrl, 448, 252, Modifier.size(224.dp, 126.dp))
                     Box(Modifier.width(24.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        T(t.ref.name, SwissType.Row36, color = if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
-                        T((t.availability.mine()?.providerName ?: "") + " · " + if (t.ref.type == MediaType.MOVIE) "Film" else "Series", SwissType.Meta)
+                        TDraw(t.ref.name, SwissType.Row36, c.ink, maxLines = 1)
+                        TDraw((t.availability.mine()?.providerName ?: "") + " · " + if (t.ref.type == MediaType.MOVIE) "Film" else "Series", SwissType.Meta, c.muted, maxLines = 1)
                     }
                 }
             }
@@ -426,13 +429,13 @@ private fun ResultsBody(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(36.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp)) {
-            for ((k, f) in Filter.entries.withIndex()) TabText(focus, 2 + k, f.label, f == filter, SwissType.Row32, Swiss.Ink)
+            for ((k, f) in Filter.entries.withIndex()) TabText(focus, 2 + k, f.label, f == filter, SwissType.Row32)
             Box(Modifier.weight(1f))
-            T("Your services: " + myServices.joinToString(", "), SwissType.Meta22, maxLines = 1)
+            T("Your services: " + myServices.joinToString(", "), SwissType.Meta, maxLines = 1)
         }
         Row(Modifier.fillMaxWidth().height(470.dp), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
             Box(Modifier.width(Swiss.span(9)).fillMaxHeight().clipToBounds().focusViewport(focus)) {
-                if (titles.isEmpty()) T(error ?: if (loading) "Loading…" else "No titles here. Try Everything.", SwissType.Body22)
+                if (titles.isEmpty()) T(error ?: if (loading) "Loading…" else "No titles here. Try Everything.", SwissType.Body)
                 // Results fade in as they arrive, and again when a filter changes the set.
                 val setKey = remember(titles) { titles.fold(17) { h, t -> h * 31 + t.key.hashCode() } }
                 val arrived = rememberAppear(setKey to filter, Motion.MEDIUM)
@@ -445,7 +448,7 @@ private fun ResultsBody(
                                 val (line, mine) = t.serviceLine()
                                 PosterCard(
                                     focus, 6 + k, t.posterUrl, 300.dp, t.ref.name, t.meta, Modifier.weight(1f),
-                                    titleStyle = SwissType.Card24, metaStyle = SwissType.Meta18, gap = 10.dp,
+                                    titleStyle = SwissType.Card, metaStyle = SwissType.Meta, gap = 10.dp,
                                     decodeW = 228, decodeH = 342, scrolling = true,
                                 ) { ServiceDot(line, mine) }
                             }
@@ -456,12 +459,12 @@ private fun ResultsBody(
             Column(Modifier.weight(1f)) {
                 if (people.isNotEmpty()) Label("People", Modifier.padding(bottom = 12.dp))
                 for ((k, p) in people.withIndex()) {
-                    RuleRow(focus, 6 + titles.size + k, vertical = 14.dp) { f ->
+                    RuleRow(focus, 6 + titles.size + k, vertical = 14.dp) { c ->
                         Initial(p.person.name, Modifier.size(72.dp))
                         Box(Modifier.width(18.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            T(p.person.name, SwissType.Row28, color = if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
-                            T(p.person.role + if (p.person.knownFor > 0) " · known for ${p.person.knownFor}" else "", SwissType.Meta18, maxLines = 1)
+                            TDraw(p.person.name, SwissType.Row28, c.ink, maxLines = 1)
+                            TDraw(p.person.role + if (p.person.knownFor > 0) " · known for ${p.person.knownFor}" else "", SwissType.Meta, c.muted, maxLines = 1)
                         }
                     }
                 }

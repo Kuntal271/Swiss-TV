@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.swissdark.launcher.core.design.LocalIconPack
 import com.swissdark.launcher.core.design.LocalReduceMotion
 import com.swissdark.launcher.core.design.LocalScreenProgress
 import com.swissdark.launcher.core.design.Motion
@@ -156,6 +157,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
         }
     }
 
+    CompositionLocalProvider(LocalIconPack provides settings.iconPack) {
     Box(Modifier.fillMaxSize().background(Swiss.Ground)) {
         // Home stays drawn until the screen on top has fully covered it, then costs nothing.
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (top == Route.Home || !nav.covered.value) 1f else 0f }) {
@@ -180,6 +182,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                         search = { activity.push(Route.Search) },
                         inputs = { activity.push(Route.Inputs) },
                         quickSettings = { activity.push(Route.Quick) },
+                        launcherSettings = { activity.push(Route.Settings()) },
                     )
                 },
                 active = top == Route.Home,
@@ -318,6 +321,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                             watchNext = g.home.watchNextStatus,
                             tmdb = g.tmdb.hasKey,
                             photosPath = "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/photos",
+                            iconPacks = remember { g.iconPacks() },
                         ),
                         device, wallpaper,
                         remember {
@@ -383,6 +387,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                     .padding(horizontal = 32.dp, vertical = 18.dp),
             )
         }
+    }
     }
 }
 

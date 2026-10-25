@@ -27,6 +27,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.draw.drawBehind
+import java.util.Locale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -36,7 +39,14 @@ import com.swissdark.launcher.core.design.Backdrop
 import com.swissdark.launcher.core.design.LocalScreenProgress
 import com.swissdark.launcher.core.design.drawSlide
 import com.swissdark.launcher.core.design.Fmt
+import com.swissdark.launcher.core.design.FocusInk
+import com.swissdark.launcher.core.design.HSpace
 import com.swissdark.launcher.core.design.Label
+import com.swissdark.launcher.core.design.ROW_SCALE
+import com.swissdark.launcher.core.design.SelectedMarker
+import com.swissdark.launcher.core.design.TDraw
+import com.swissdark.launcher.core.design.focusFill
+import com.swissdark.launcher.core.design.rememberFocusInk
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
 import com.swissdark.launcher.core.design.T
@@ -90,14 +100,15 @@ private fun PanelFrame(wallpaper: PreparedWallpaper, width: Dp, content: @Compos
 private fun PanelHeader(title: String, status: String, rule: Boolean = true) {
     Row(Modifier.fillMaxWidth().then(if (rule) Modifier.bottomRule() else Modifier).padding(bottom = 18.dp)) {
         Label(title, Modifier.weight(1f).alignByBaseline(), Swiss.Ink)
-        Label(status, Modifier.alignByBaseline(), Swiss.Focus)
+        Label(status, Modifier.alignByBaseline(), Swiss.Ink)
     }
 }
 
 /**
  * One full-width row between rules, shared by both panels. It is a single focus item: the
  * engine only ever sees a vertical stack of rows, so UP/DOWN walk the rows in visual order.
- * Focus = a 4 px amber rule on top and amber text (the row restyles itself, as in the design).
+ * [fill]: focus = the whole row turns yellow with black text and grows 1.02. Option rows
+ * (fill = false) show focus on the option under the cursor instead. Draw phase only.
  */
 @Composable
 private fun PanelRow(
@@ -105,14 +116,17 @@ private fun PanelRow(
     index: Int,
     last: Boolean,
     scrolling: Boolean = false,
-    content: @Composable RowScope.(focused: Boolean) -> Unit,
+    fill: Boolean = true,
+    content: @Composable RowScope.(FocusInk) -> Unit,
 ) {
-    val f by remember(focus, index) { focus.isFocused(index) }
-    var m = Modifier.fillMaxWidth().focusItem(focus, index, FocusStyle.SELF, scrolling)
-    m = if (f) m.topRule(4.dp, Swiss.Focus) else m.topRule()
+    val ink = rememberFocusInk(focus, index)
+    var m = Modifier.fillMaxWidth().topRule()
     if (last) m = m.bottomRule()
-    Row(m) { content(f) }
+    m = if (fill) m.focusFill(focus, index, ink, ROW_SCALE, scrolling) else m.focusItem(focus, index, FocusStyle.SELF, scrolling)
+    Row(m.padding(horizontal = RowPadX)) { content(ink) }
 }
+
+private val RowPadX = 24.dp
 
 // ---------------------------------------------------------------- Inputs
 
@@ -133,16 +147,20 @@ fun InputsPanel(inputs: List<TvInput>, current: String?, wallpaper: PreparedWall
                 // inputs than fit (the design shows four; this TV reports seven).
                 Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().focusViewport(focus)) {
                     Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).focusScroll(focus)) {
-                        if (inputs.isEmpty()) T("No inputs reported by this TV.", SwissType.Body22)
+                        if (inputs.isEmpty()) T("No inputs reported by this TV.", SwissType.Body)
                         for ((i, inp) in inputs.withIndex()) {
-                            PanelRow(focus, i, last = i == inputs.lastIndex, scrolling = true) { f ->
-                                T(inp.label, SwissType.Row44, Modifier.weight(1f).alignByBaseline().padding(vertical = 22.dp), if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
-                                T(inp.detail, SwissType.Meta22, Modifier.alignByBaseline(), if (f) Swiss.Focus else Swiss.Muted, maxLines = 1)
+                            PanelRow(focus, i, last = i == inputs.lastIndex, scrolling = true) { c ->
+                                if (inp.label == current) {
+                                    SelectedMarker(c.ink, Modifier.align(Alignment.CenterVertically))
+                                    HSpace(16.dp)
+                                }
+                                TDraw(inp.label, SwissType.Row44, c.ink, Modifier.weight(1f).alignByBaseline().padding(vertical = 22.dp), maxLines = 1)
+                                TDraw(inp.detail, SwissType.Meta, c.muted, Modifier.alignByBaseline(), maxLines = 1)
                             }
                         }
                     }
                 }
-                T("Names come from HDMI-CEC. Switching runs through TCL’s own TV app, which stays installed.", SwissType.Body22)
+                T("Names come from HDMI-CEC. Switching runs through TCL’s own TV app, which stays installed.", SwissType.Body)
             }
         }
     }
@@ -177,8 +195,9 @@ private const val ROW_LINKS = 5
 private const val ROWS = 6
 private val rowSizes = intArrayOf(pictures.size, sounds.size, sleeps.size, 1, 1, 2)
 
-/** The design's 200 px label column; values start at the same x on every row. */
-private val LabelCol = 200.dp
+/** Label column; values start at the same x on every row. */
+private val LabelCol = 170.dp
+
 
 @Composable
 fun QuickSettingsPanel(
@@ -249,56 +268,74 @@ fun QuickSettingsPanel(
 }
 
 @Composable
-private fun RowScope.RowLabel(text: String, focused: Boolean) {
-    Label(text, Modifier.width(LabelCol).alignByBaseline().padding(vertical = 24.dp), if (focused) Swiss.Focus else Swiss.Muted)
+private fun RowScope.RowLabel(text: String, color: ColorProducer) {
+    TDraw(text.uppercase(Locale.ROOT), SwissType.Label, color, Modifier.width(LabelCol).alignByBaseline().padding(vertical = 24.dp), maxLines = 1)
 }
 
-/** Label + a row of options. Current value: underlined; in the focused row the cursor is amber. */
+/**
+ * Label + a row of options. The option under the cursor in the focused row: yellow block, black
+ * text. The current value: ink text and a 10 px marker. Others muted. Cursor and focus are read
+ * in the draw phase: LEFT/RIGHT and UP/DOWN only re-draw.
+ */
 @Composable
 private fun OptionRow(focus: FocusScreenState, index: Int, label: String, options: List<String>, selected: Int, cursor: IntState) {
-    PanelRow(focus, index, last = false) { f ->
-        RowLabel(label, f)
+    val focused = remember(focus, index) { focus.isFocused(index) }
+    val labelColor = remember(focused) { ColorProducer { if (focused.value) Swiss.Ink else Swiss.Muted } }
+    PanelRow(focus, index, last = false, fill = false) {
+        RowLabel(label, labelColor)
         Row(
-            Modifier.weight(1f).alignByBaseline().padding(vertical = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(36.dp),
+            Modifier.weight(1f).alignByBaseline().padding(vertical = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val c = if (f) cursor.intValue else -1
             for ((k, o) in options.withIndex()) {
-                val (color, rule) = when {
-                    k == c -> Swiss.Focus to Swiss.Focus
-                    k == selected -> Swiss.Ink to Swiss.Ink
-                    else -> Swiss.Muted to Color.Transparent
+                val on = remember(focused, k) { { focused.value && cursor.intValue == k } }
+                val base = if (k == selected) Swiss.Ink else Swiss.Muted
+                val color = remember(on, base) { ColorProducer { if (on()) Swiss.Ground else base } }
+                Row(
+                    Modifier.drawBehind { if (on()) drawRect(Swiss.Focus) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (k == selected) {
+                        SelectedMarker(color)
+                        HSpace(10.dp)
+                    }
+                    TDraw(o, SwissType.Row30, color, maxLines = 1)
                 }
-                T(o, SwissType.Row34, Modifier.alignByBaseline().bottomRule(4.dp, rule).padding(top = 4.dp, bottom = 8.dp), color, maxLines = 1)
             }
         }
     }
 }
 
-/** Label + one value that opens a page (Network, Screen). */
+/** Label + one value that opens a page (Network, Screen). Focus fills the row. */
 @Composable
 private fun ValueRow(focus: FocusScreenState, index: Int, label: String, value: String, last: Boolean) {
-    PanelRow(focus, index, last) { f ->
-        RowLabel(label, f)
-        T(value, SwissType.Row34, Modifier.weight(1f).alignByBaseline().padding(vertical = 24.dp), if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
+    PanelRow(focus, index, last) { c ->
+        RowLabel(label, c.muted)
+        TDraw(value, SwissType.Row30, c.ink, Modifier.weight(1f).alignByBaseline().padding(vertical = 24.dp), maxLines = 1)
     }
 }
 
-/** Footer links: one focus item, LEFT/RIGHT between links; the focused link is underlined. */
+/** Footer links: one focus item, LEFT/RIGHT between links; the link under the cursor fills yellow. */
 @Composable
 private fun LinksRow(focus: FocusScreenState, index: Int, links: List<String>, cursor: IntState) {
-    val f by remember(focus, index) { focus.isFocused(index) }
-    Row(Modifier.fillMaxWidth().focusItem(focus, index, FocusStyle.SELF), horizontalArrangement = Arrangement.spacedBy(48.dp)) {
-        val c = if (f) cursor.intValue else -1
+    val focused = remember(focus, index) { focus.isFocused(index) }
+    Row(Modifier.fillMaxWidth().focusItem(focus, index, FocusStyle.SELF), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         for ((k, text) in links.withIndex()) {
-            T(
-                text, SwissType.Button,
-                Modifier.bottomRule(4.dp, if (k == c) Swiss.Focus else Color.Transparent).padding(vertical = 8.dp),
-                if (k == 0 || k == c) Swiss.Focus else Swiss.Ink,
+            val on = remember(focused, k) { { focused.value && cursor.intValue == k } }
+            val color = remember(on) { ColorProducer { if (on()) Swiss.Ground else Swiss.Ink } }
+            TDraw(
+                text, SwissType.Button, color,
+                Modifier.drawBehind { if (on()) drawRect(Swiss.Focus) else drawOutline(Swiss.Rule) }.padding(horizontal = 24.dp, vertical = 14.dp),
                 maxLines = 1,
             )
         }
     }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawOutline(c: Color) {
+    val w = 2.dp.toPx()
+    drawRect(c, androidx.compose.ui.geometry.Offset(w / 2f, w / 2f), androidx.compose.ui.geometry.Size(size.width - w, size.height - w), style = androidx.compose.ui.graphics.drawscope.Stroke(w))
 }
 
 private fun openNetworkSettings(context: Context) {
