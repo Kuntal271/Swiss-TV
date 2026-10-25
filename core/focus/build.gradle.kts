@@ -16,3 +16,7 @@ dependencies {
     api(project(":core:perf"))
     implementation(libs.coroutines.android)
 }
+
+dependencies {
+    testImplementation(libs.junit)
+}

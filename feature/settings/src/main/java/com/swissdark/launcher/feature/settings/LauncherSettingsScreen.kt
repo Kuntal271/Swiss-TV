@@ -29,7 +29,16 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
 import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.LocalReduceMotion
+import com.swissdark.launcher.core.design.Motion
+import com.swissdark.launcher.core.design.drawSlide
+import com.swissdark.launcher.core.design.rememberAppear
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Footer
 import com.swissdark.launcher.core.design.Frame
@@ -129,8 +138,10 @@ fun LauncherSettingsScreen(
                         }
                     }
                     Box(Modifier.width(Swiss.span(1)))
+                    // A new section fades in with a 16 px slide (draw phase: rows keep their layout).
+                    val sectionIn = rememberAppear(section, Motion.MEDIUM, from = 0.2f)
                     Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().focusViewport(focus)) {
-                        Column(Modifier.fillMaxWidth().focusScroll(focus), verticalArrangement = Arrangement.spacedBy(26.dp)) {
+                        Column(Modifier.fillMaxWidth().drawSlide({ sectionIn.value }, dx = Motion.ITEM_SLIDE).focusScroll(focus), verticalArrangement = Arrangement.spacedBy(26.dp)) {
                             T(sections[section], SwissType.Hero)
                             content.body(focus, sections.size)
                         }
@@ -296,12 +307,30 @@ private fun Thumb(
     LaunchedEffect(wp?.id, h) {
         if (wp != null) bmp = withContext(Dispatchers.IO) { a.thumbnail(wp, h * 16 / 9 * 2, h * 2) }
     }
+    // Selection: the amber rule under the picked thumbnail draws out from the centre.
+    val reduce = LocalReduceMotion.current
+    val sel = remember { Animatable(if (selected) 1f else 0f) }
+    LaunchedEffect(selected) {
+        val t = if (selected) 1f else 0f
+        if (sel.value != t) { if (reduce) sel.snapTo(t) else sel.animateTo(t, Motion.standard(Motion.MEDIUM)) }
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().height(h.dp).focusItem(f, index, scrolling = true).background(Swiss.Placeholder)
-                .let { if (selected) it.bottomRule(4.dp, Swiss.Focus) else it },
+                .drawWithContent {
+                    drawContent()
+                    val s = sel.value
+                    if (s > 0f) {
+                        val w = 4.dp.toPx(); val rw = size.width * s
+                        drawRect(Swiss.Focus, Offset((size.width - rw) / 2f, size.height - w), Size(rw, w))
+                    }
+                },
         ) {
-            bmp?.let { Image(remember(it) { it.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+            // Thumbnails fade in as they decode.
+            bmp?.let {
+                val fade = rememberAppear(it, Motion.MEDIUM)
+                Image(remember(it) { it.asImageBitmap() }, null, Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }, contentScale = ContentScale.Crop)
+            }
         }
         caption()
     }

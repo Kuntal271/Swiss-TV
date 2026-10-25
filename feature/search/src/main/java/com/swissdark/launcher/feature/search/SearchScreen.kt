@@ -36,6 +36,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.swissdark.launcher.core.design.Art
+import com.swissdark.launcher.core.design.Motion
+import com.swissdark.launcher.core.design.enter
+import com.swissdark.launcher.core.design.rememberAppear
 import com.swissdark.launcher.core.design.Backdrop
 import com.swissdark.launcher.core.design.Chip
 import com.swissdark.launcher.core.design.Fmt
@@ -300,10 +303,14 @@ fun SearchScreen(
                     }
                 }
 
-                when (mode) {
-                    0 -> StartBody(focus, recentShown, trendShown, daily, hasTmdb)
-                    1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb)
-                    else -> ResultsBody(focus, filter, filtered, people, myServiceNames, browse != null && browseHits.isEmpty(), error)
+                // Start → typing → results: the body fades in on each mode change.
+                val bodyIn = rememberAppear(mode, Motion.MEDIUM, from = 0.25f)
+                Box(Modifier.fillMaxWidth().enter({ bodyIn.value }, dy = 0f)) {
+                    when (mode) {
+                        0 -> StartBody(focus, recentShown, trendShown, daily, hasTmdb)
+                        1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb)
+                        else -> ResultsBody(focus, filter, filtered, people, myServiceNames, browse != null && browseHits.isEmpty(), error)
+                    }
                 }
                 Box(Modifier.weight(1f))
                 when (mode) {
@@ -390,6 +397,8 @@ private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: Li
         Column(Modifier.weight(1f)) {
             Label("Titles · only on services you pay for", Modifier.padding(bottom = 14.dp))
             if (titles.isEmpty()) T(if (loading) "Looking…" else "Nothing on your services yet.", SwissType.Body22)
+            val arrived = rememberAppear(titles.isNotEmpty(), Motion.MEDIUM)
+            Column(Modifier.enter({ arrived.value }, dy = 0f)) {
             for ((k, t) in titles.withIndex()) {
                 RuleRow(focus, 2 + apps.size + k, vertical = 16.dp) { f ->
                     Art(t.backdropUrl ?: t.posterUrl, 448, 252, Modifier.size(224.dp, 126.dp))
@@ -399,6 +408,7 @@ private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: Li
                         T((t.availability.mine()?.providerName ?: "") + " · " + if (t.ref.type == MediaType.MOVIE) "Film" else "Series", SwissType.Meta)
                     }
                 }
+            }
             }
         }
     }
@@ -423,7 +433,10 @@ private fun ResultsBody(
         Row(Modifier.fillMaxWidth().height(470.dp), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
             Box(Modifier.width(Swiss.span(9)).fillMaxHeight().clipToBounds().focusViewport(focus)) {
                 if (titles.isEmpty()) T(error ?: if (loading) "Loading…" else "No titles here. Try Everything.", SwissType.Body22)
-                Column(Modifier.focusScroll(focus), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+                // Results fade in as they arrive, and again when a filter changes the set.
+                val setKey = remember(titles) { titles.fold(17) { h, t -> h * 31 + t.key.hashCode() } }
+                val arrived = rememberAppear(setKey to filter, Motion.MEDIUM)
+                Column(Modifier.enter({ arrived.value }, dy = 0f).focusScroll(focus), verticalArrangement = Arrangement.spacedBy(32.dp)) {
                     for (r in 0 until (titles.size + 5) / 6) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                         for (c in 0 until 6) {
                             val k = r * 6 + c

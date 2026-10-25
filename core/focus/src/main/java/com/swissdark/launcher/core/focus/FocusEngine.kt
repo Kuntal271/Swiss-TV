@@ -121,6 +121,9 @@ object FocusGraphBuilder {
                 if (s < bestBeamScore) { bestBeamScore = s; bestBeam = j }
             } else {
                 val gap = -overlap
+                // LEFT/RIGHT never jump to another row that is further away than the smaller of the
+                // two items is tall (e.g. a footer link must not jump up into the tile grid).
+                if ((dir == DpadKey.LEFT || dir == DpadKey.RIGHT) && gap > minOf(ih, jh)) continue
                 val s = primary + gap * 3f + orthoCenter * 0.5f
                 if (s < bestAnyScore) { bestAnyScore = s; bestAny = j }
             }

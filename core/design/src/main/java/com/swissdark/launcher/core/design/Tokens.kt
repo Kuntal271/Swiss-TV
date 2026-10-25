@@ -53,5 +53,7 @@ fun DesignCanvas(content: @Composable () -> Unit) {
         val detach = SemanticsGate.attach(view)
         onDispose { detach() }
     }
-    CompositionLocalProvider(LocalDensity provides density, content = content)
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val reduce = androidx.compose.runtime.remember(ctx) { Motion.reduceMotion(ctx) }
+    CompositionLocalProvider(LocalDensity provides density, LocalReduceMotion provides reduce, content = content)
 }

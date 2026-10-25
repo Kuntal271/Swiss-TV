@@ -11,6 +11,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -52,6 +53,7 @@ class FocusScreenState internal constructor(
     private var rects = FloatArray(count * 4)
     private var styles = arrayOfNulls<FocusStyle>(count)
     private var scrolls = BooleanArray(count)
+    private var scales = BooleanArray(count)
     private var seen = BooleanArray(count)
     private var seenCount = 0
     private var dirty = true
@@ -66,6 +68,32 @@ class FocusScreenState internal constructor(
     private var animJob: Job? = null
     private val from = FloatArray(4)
     private val to = FloatArray(4)
+
+    // Focus scale, read in the draw phase only. The item that gains focus grows from curFrom to
+    // curTo and the one that lost it shrinks back to 1, both on the ring's own 0..1 progress, so
+    // ring and item always move together.
+    private val scaleCur = mutableIntStateOf(-1)
+    private val scalePrev = mutableIntStateOf(-1)
+    private val progress = mutableFloatStateOf(1f)
+    private var curFrom = 1f
+    private var curTo = 1f
+    private var prevFrom = 1f
+    private var ringMoves = false
+
+    /** Scale of a focused item that opted in (focusItem(scale = true)). 1 = no scale. */
+    var focusScale = 1.04f
+
+    /** Current draw scale of [index]; reads snapshot state, so call it from the draw phase. */
+    fun scaleOf(index: Int): Float {
+        // Progress is read only by the two items involved, so an animation frame never
+        // re-evaluates every item's scale.
+        if (index == scaleCur.intValue) return curFrom + (curTo - curFrom) * progress.floatValue
+        if (index == scalePrev.intValue) return prevFrom + (1f - prevFrom) * progress.floatValue
+        return 1f
+    }
+
+    /** Per-item scale that only notifies when this item's value changes. */
+    fun scaleState(index: Int): State<Float> = derivedStateOf { scaleOf(index) }
 
     /** Vertical scroll of the scrolling region, applied at placement. */
     val scrollY = mutableFloatStateOf(0f)
@@ -100,6 +128,9 @@ class FocusScreenState internal constructor(
         rects = FloatArray(newCount * 4)
         styles = arrayOfNulls(newCount)
         scrolls = BooleanArray(newCount)
+        scales = BooleanArray(newCount)
+        scaleCur.intValue = -1
+        scalePrev.intValue = -1
         seen = BooleanArray(newCount)
         seenCount = 0
         dirty = true
@@ -107,13 +138,13 @@ class FocusScreenState internal constructor(
         engine.set(keepIndex.coerceIn(0, (newCount - 1).coerceAtLeast(0)))
     }
 
-    internal fun register(index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean) {
+    internal fun register(index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false) {
         if (index < 0 || index >= count) return
         val p = c.positionInRoot()
         val y = p.y + if (scrolling) scrollY.floatValue else 0f
         val o = index * 4
         val w = c.size.width.toFloat(); val h = c.size.height.toFloat()
-        var changed = styles[index] != style || scrolls[index] != scrolling || !seen[index]
+        var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || !seen[index]
         if (rects[o] != p.x || rects[o + 1] != y || rects[o + 2] != w || rects[o + 3] != h) {
             rects[o] = p.x; rects[o + 1] = y; rects[o + 2] = w; rects[o + 3] = h
             dirty = true
@@ -121,6 +152,7 @@ class FocusScreenState internal constructor(
         }
         styles[index] = style
         scrolls[index] = scrolling
+        scales[index] = scale
         if (!seen[index]) {
             seen[index] = true
             seenCount++
@@ -130,8 +162,7 @@ class FocusScreenState internal constructor(
         // is re-targeted rather than snapped.
         if (changed && index == engine.focused.intValue) {
             if (animJob?.isActive == true && style == FocusStyle.RING) {
-                val dy = if (scrolling) scrollY.floatValue else 0f
-                to[0] = rects[o]; to[1] = rects[o + 1] - dy; to[2] = rects[o + 2]; to[3] = rects[o + 3]
+                ringTarget(index)
             } else {
                 placeRing(animate = false)
             }
@@ -161,31 +192,62 @@ class FocusScreenState internal constructor(
         else if (top - s < viewportTop) scrollY.floatValue = (top - viewportTop).coerceAtLeast(0f)
     }
 
+    /** The ring's target for item [i]: its rect, grown by the focus scale when the item scales. */
+    private fun ringTarget(i: Int) {
+        val o = i * 4
+        val dy = if (scrolls[i]) scrollY.floatValue else 0f
+        val s = if (scales[i]) focusScale else 1f
+        val w = rects[o + 2]; val h = rects[o + 3]
+        val gx = w * (s - 1f) / 2f; val gy = h * (s - 1f) / 2f
+        to[0] = rects[o] - gx; to[1] = rects[o + 1] - dy - gy; to[2] = w + 2 * gx; to[3] = h + 2 * gy
+    }
+
     private fun placeRing(animate: Boolean) {
         val i = engine.focused.intValue
-        if (i < 0 || i >= count || styles[i] != FocusStyle.RING) {
+        animJob?.cancel()
+        if (i < 0 || i >= count) {
             ringAlpha.floatValue = 0f
             return
         }
-        val o = i * 4
-        val dy = if (scrolls[i]) scrollY.floatValue else 0f
-        to[0] = rects[o]; to[1] = rects[o + 1] - dy; to[2] = rects[o + 2]; to[3] = rects[o + 3]
+        // Hand the scale over from whatever is scaled now (mid-animation values included).
+        val old = scaleCur.intValue
+        val sNew = scaleOf(i)
+        prevFrom = if (old != i && old >= 0) scaleOf(old) else 1f
+        curFrom = sNew
+        curTo = if (scales[i]) focusScale else 1f
+        scalePrev.intValue = if (old != i) old else -1
+        scaleCur.intValue = i
+
+        val ring = styles[i] == FocusStyle.RING
         val wasVisible = ringAlpha.floatValue > 0f
-        ringAlpha.floatValue = 1f
-        animJob?.cancel()
-        if (!animate || !wasVisible) {
+        if (ring) {
+            ringTarget(i)
+            ringAlpha.floatValue = 1f
+        } else {
+            ringAlpha.floatValue = 0f
+        }
+        ringMoves = ring && wasVisible
+        if (!ringMoves && ring) {
             ringX.floatValue = to[0]; ringY.floatValue = to[1]; ringW.floatValue = to[2]; ringH.floatValue = to[3]
+        }
+        if (!animate || (!ringMoves && curFrom == curTo && prevFrom == 1f)) {
+            progress.floatValue = 1f
+            if (ring) { ringX.floatValue = to[0]; ringY.floatValue = to[1]; ringW.floatValue = to[2]; ringH.floatValue = to[3] }
             return
         }
         from[0] = ringX.floatValue; from[1] = ringY.floatValue; from[2] = ringW.floatValue; from[3] = ringH.floatValue
+        progress.floatValue = 0f
         animJob = scope.launch {
             anim.snapTo(0f)
             anim.animateTo(1f, tween(120, easing = FastOutSlowInEasing)) {
                 val t = value
-                ringX.floatValue = from[0] + (to[0] - from[0]) * t
-                ringY.floatValue = from[1] + (to[1] - from[1]) * t
-                ringW.floatValue = from[2] + (to[2] - from[2]) * t
-                ringH.floatValue = from[3] + (to[3] - from[3]) * t
+                progress.floatValue = t
+                if (ringMoves) {
+                    ringX.floatValue = from[0] + (to[0] - from[0]) * t
+                    ringY.floatValue = from[1] + (to[1] - from[1]) * t
+                    ringW.floatValue = from[2] + (to[2] - from[2]) * t
+                    ringH.floatValue = from[3] + (to[3] - from[3]) * t
+                }
             }
         }
     }
@@ -228,13 +290,26 @@ class FocusScreenState internal constructor(
                         onLongClick(engine.focused.intValue)
                     }
                 } else if (e.action == KeyEvent.ACTION_UP) {
-                    if (okDownAt >= 0 && !longFired) onClick(engine.focused.intValue)
+                    if (okDownAt >= 0 && !longFired) {
+                        recordOrigin(engine.focused.intValue)
+                        onClick(engine.focused.intValue)
+                    }
                     okDownAt = -1
                 }
                 return true
             }
         }
         return onOtherKey(e)
+    }
+
+    /** Where the clicked item is on screen, so an app started by this click can grow out of it. */
+    private fun recordOrigin(i: Int) {
+        if (i < 0 || i >= count || !seen[i]) return
+        val o = i * 4
+        val dy = if (scrolls[i]) scrollY.floatValue else 0f
+        val s = if (scales[i]) focusScale else 1f
+        val w = rects[o + 2] * s; val h = rects[o + 3] * s
+        LaunchOrigin.record(rects[o] - (w - rects[o + 2]) / 2f, rects[o + 1] - dy - (h - rects[o + 3]) / 2f, w, h)
     }
 
     internal fun drawRing(scope: androidx.compose.ui.graphics.drawscope.DrawScope, color: Color) {
@@ -297,7 +372,8 @@ fun Modifier.focusItem(
     index: Int,
     style: FocusStyle = FocusStyle.RING,
     scrolling: Boolean = false,
-): Modifier = onGloballyPositioned { state.register(index, it, style, scrolling) }
+    scale: Boolean = false,
+): Modifier = onGloballyPositioned { state.register(index, it, style, scrolling, scale) }
 
 /** The scrolling region: offset at placement, so a scroll never recomposes or measures. */
 fun Modifier.focusScroll(state: FocusScreenState): Modifier =
@@ -309,4 +385,25 @@ fun Modifier.focusViewport(state: FocusScreenState): Modifier = onGloballyPositi
     val p = it.positionInRoot()
     state.viewportTop = p.y
     state.viewportBottom = p.y + it.size.height
+}
+
+/**
+ * The on-screen rect (window px) of the item the last OK press clicked. An app launch that follows
+ * within a moment takes it to start the app with a scale-up from that item.
+ */
+object LaunchOrigin {
+    private val rect = IntArray(4)
+    private var at = 0L
+
+    fun record(x: Float, y: Float, w: Float, h: Float) {
+        rect[0] = x.roundToInt(); rect[1] = y.roundToInt(); rect[2] = w.roundToInt(); rect[3] = h.roundToInt()
+        at = android.os.SystemClock.uptimeMillis()
+    }
+
+    /** The rect as x, y, w, h if a click recorded one in the last second; cleared once taken. */
+    fun take(): IntArray? {
+        if (at == 0L || android.os.SystemClock.uptimeMillis() - at > 1_000) return null
+        at = 0L
+        return rect.copyOf()
+    }
 }

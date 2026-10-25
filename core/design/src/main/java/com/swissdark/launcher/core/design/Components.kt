@@ -50,6 +50,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.scale
 import com.swissdark.launcher.core.focus.FocusScreenState
 import com.swissdark.launcher.core.focus.FocusStyle
 import com.swissdark.launcher.core.focus.focusItem
@@ -162,11 +166,43 @@ fun Footer(hint: String, keys: List<KeyHint>, modifier: Modifier = Modifier) {
 
 // ---------- pieces ----------
 
+/** Track + fill. The fill animates to its value (from 0 on first show) in the draw phase. */
 @Composable
 fun ProgressBar(fraction: Float, fill: Color, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().height(6.dp).background(Swiss.Track)) {
-        Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(fill))
+    val f = rememberFill(fraction)
+    Spacer(
+        modifier.fillMaxWidth().height(6.dp).drawBehind {
+            drawRect(Swiss.Track)
+            drawRect(fill, Offset.Zero, Size(size.width * f.value, size.height))
+        },
+    )
+}
+
+/** Animated 0..1 fill: from 0 on first composition, then from the old value to the new one. */
+@Composable
+internal fun rememberFill(target: Float): State<Float> {
+    val t = target.coerceIn(0f, 1f)
+    val reduce = LocalReduceMotion.current
+    val a = remember { Animatable(if (reduce) t else 0f) }
+    LaunchedEffect(t) {
+        if (reduce) a.snapTo(t) else a.animateTo(t, tween(Motion.LONG, Motion.STAGGER * 2, Motion.EnterEasing))
     }
+    return a.asState()
+}
+
+/**
+ * Focus scale for an item marked focusItem(scale = true): a canvas scale around the centre, read
+ * in the draw phase from the focus state, so it moves on the ring's own progress and never
+ * touches layout (focus rects stay unscaled; the ring adds the scale itself).
+ */
+@Composable
+fun Modifier.focusScaled(state: FocusScreenState, index: Int): Modifier {
+    if (LocalReduceMotion.current) return this.graphicsLayer()
+    val sc = remember(state, index) { state.scaleState(index) }
+    return this.graphicsLayer().drawWithContent {
+        val s = sc.value
+        if (s == 1f) drawContent() else scale(s) { this@drawWithContent.drawContent() }
+    }.graphicsLayer()
 }
 
 @Composable
@@ -187,18 +223,21 @@ fun IconTile(
     iconSize: Dp = 47.dp,
     scrolling: Boolean = false,
     badge: String? = null,
+    outline: Boolean = false,
 ) {
     // Focus is read only while drawing (glyph tint, label colour) inside the tile's own layer:
     // a D-pad press re-records two small layers and recomposes nothing.
     val focused = remember(state, index) { state.isFocused(index) }
     val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
+    val reduce = LocalReduceMotion.current
     Column(
         modifier
             .height(height)
-            .focusItem(state, index, FocusStyle.RING, scrolling)
-            .graphicsLayer()
+            .focusItem(state, index, FocusStyle.RING, scrolling, scale = !reduce)
+            .focusScaled(state, index)
             .border(1.dp, Swiss.Track)
             .background(Swiss.TileFill)
+            .then(if (outline) Modifier.drawBehind { drawInsetBorder(3.dp.toPx(), Swiss.Focus) } else Modifier)
             .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -252,8 +291,10 @@ fun Art(key: String?, width: Int, height: Int, modifier: Modifier = Modifier) {
         }
         else -> {
             val ctx = LocalContext.current
-            val req = remember(key, width, height) {
-                ImageRequest.Builder(ctx).data(key).size(width, height).build()
+            val reduce = LocalReduceMotion.current
+            val req = remember(key, width, height, reduce) {
+                // Network art fades in when it arrives; memory-cache hits draw at once (Coil skips the fade).
+                ImageRequest.Builder(ctx).data(key).size(width, height).crossfade(if (reduce) 0 else Motion.MEDIUM).build()
             }
             AsyncImage(req, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop)
         }
@@ -282,15 +323,16 @@ fun PosterCard(
     // Focus is read only while drawing, inside the card's own layer (see IconTile).
     val focused = remember(state, index) { state.isFocused(index) }
     val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
+    val reduce = LocalReduceMotion.current
     Column(modifier.graphicsLayer(), verticalArrangement = Arrangement.spacedBy(gap)) {
-        Column(Modifier.fillMaxWidth().focusItem(state, index, FocusStyle.RING, scrolling)) {
+        Column(Modifier.fillMaxWidth().focusItem(state, index, FocusStyle.RING, scrolling, scale = !reduce).focusScaled(state, index)) {
             Art(art, decodeW, decodeH, Modifier.fillMaxWidth().height(imageHeight))
             if (progress != null) {
-                val f = progress.coerceIn(0f, 1f)
+                val f = rememberFill(progress)
                 Spacer(
                     Modifier.fillMaxWidth().height(6.dp).drawBehind {
                         drawRect(Swiss.Track)
-                        drawRect(color(), Offset.Zero, Size(size.width * f, size.height))
+                        drawRect(color(), Offset.Zero, Size(size.width * f.value, size.height))
                     },
                 )
             }
@@ -352,11 +394,22 @@ fun TabText(
             }
         }
     }
+    // A newly selected tab's underline draws out from the centre (160 ms); focus shows at once.
+    val reduce = LocalReduceMotion.current
+    val sel = remember { Animatable(if (selected) 1f else 0f) }
+    LaunchedEffect(selected) {
+        val t = if (selected) 1f else 0f
+        if (sel.value != t) {
+            if (reduce) sel.snapTo(t) else sel.animateTo(t, Motion.standard(Motion.SHORT))
+        }
+    }
     val m = Modifier.focusItem(state, index, FocusStyle.SELF).drawBehind {
         val f = focused.value
-        if (selected || f) {
+        val s = sel.value
+        if (s > 0f || f) {
             val w = underline.toPx()
-            drawRect(if (f) Swiss.Focus else Swiss.Ink, Offset(0f, size.height - w), Size(size.width, w))
+            val uw = if (f) size.width else size.width * s
+            drawRect(if (f) Swiss.Focus else Swiss.Ink, Offset((size.width - uw) / 2f, size.height - w), Size(uw, w))
         }
     }
     TDraw(text, style, color, m.padding(vertical = 4.dp), maxLines = 1)

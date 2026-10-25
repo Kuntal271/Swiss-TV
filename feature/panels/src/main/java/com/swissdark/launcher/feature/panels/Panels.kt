@@ -30,7 +30,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.LocalScreenProgress
+import com.swissdark.launcher.core.design.drawSlide
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.Swiss
@@ -64,13 +68,18 @@ private fun back(onBack: () -> Unit): (KeyEvent) -> Boolean = { e ->
 @Composable
 private fun PanelFrame(wallpaper: PreparedWallpaper, width: Dp, content: @Composable () -> Unit) {
     val now by rememberMinute()
-    Row(Modifier.fillMaxSize().background(Swiss.Ground)) {
-        Box(Modifier.weight(1f).fillMaxHeight()) {
+    // Opening: the dimmed wallpaper side fades in over Home (a scrim) while the panel slides in
+    // from the right edge; closing runs the same backwards. Draw-phase only (layer alpha and a
+    // canvas translation), so the panel's rows keep their layout positions throughout.
+    val progress = LocalScreenProgress.current
+    val slide = with(LocalDensity.current) { width.toPx() }
+    Row(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxHeight().graphicsLayer { alpha = progress() }) {
             Backdrop(wallpaper, totalDim = 0.6f)
             T(now.format(Fmt.clock), SwissType.ClockPanel, Modifier.align(Alignment.BottomStart).padding(start = 120.dp, bottom = 120.dp), Swiss.DimClock)
         }
         Box(
-            Modifier.width(width).fillMaxHeight().background(Swiss.Panel).leftRule()
+            Modifier.width(width).fillMaxHeight().drawSlide(progress, dx = slide, fade = false).background(Swiss.Panel).leftRule()
                 .padding(72.dp),
         ) { content() }
     }

@@ -18,7 +18,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.CrossfadeText
+import com.swissdark.launcher.core.design.LocalReduceMotion
+import com.swissdark.launcher.core.design.Motion
+import com.swissdark.launcher.core.design.enter
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Frame
 import com.swissdark.launcher.core.design.Header
@@ -66,7 +73,7 @@ private val links = listOf("Search", "All apps", "Inputs", "Settings")
  * A press moves one integer; the hero text reads the focused card from the snapshot.
  */
 @Composable
-fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean) {
+fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean, entrance: Int = 0) {
     val up = snapshot.upNext
     val apps = snapshot.apps
     val nUp = up.size
@@ -113,16 +120,35 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
         }
     }
 
+    // Entrance (first show, back from an app): five groups settle in turn, top to bottom.
+    // Everything is composed and drawn on frame 1 (from 35 % alpha), 300 ms in all. Header and
+    // clock also rise 16 px (canvas translation); the rows with focus items only fade, so focus
+    // rects and the ring never move.
+    val reduce = LocalReduceMotion.current
+    val enter = remember { Animatable(if (reduce) 1f else 0f) }
+    LaunchedEffect(entrance) {
+        if (reduce) return@LaunchedEffect
+        enter.snapTo(0f)
+        enter.animateTo(1f, tween(ENTRANCE_MS, easing = LinearEasing))
+    }
+    val g0 = remember { group(enter, 0) }
+    val g1 = remember { group(enter, 1) }
+    val g2 = remember { group(enter, 2) }
+    val g3 = remember { group(enter, 3) }
+    val g4 = remember { group(enter, 4) }
+
     Box(Modifier.fillMaxSize()) {
         Backdrop(wallpaper)
         FocusRoot(focus, Swiss.Focus) {
             Frame {
-                Header(status.deviceName.uppercase(), now.format(Fmt.headerDate), status.network, "Home")
+                Box(Modifier.enter(g0, fromAlpha = FROM_ALPHA)) {
+                    Header(status.deviceName.uppercase(), now.format(Fmt.headerDate), status.network, "Home")
+                }
                 // Clock, hero, caption
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
+                Row(Modifier.fillMaxWidth().weight(1f).enter(g1, fromAlpha = FROM_ALPHA), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(6)).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            T(now.format(Fmt.clock), SwissType.Clock)
+                            CrossfadeText(now.format(Fmt.clock), SwissType.Clock)
                             Label(now.format(Fmt.longDate))
                         }
                         Hero(focus.engine.focused, up, status)
@@ -132,7 +158,7 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
-                    Column(Modifier.width(Swiss.span(7)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.width(Swiss.span(7)).enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Label("Up next")
                         if (up.isEmpty()) {
                             T("Nothing to continue yet — start something and it’ll appear here.", SwissType.Body22, Modifier.padding(vertical = 60.dp))
@@ -146,22 +172,48 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                             repeat(3 - up.size) { Box(Modifier.weight(1f)) }
                         }
                     }
-                    Column(Modifier.width(Swiss.span(5)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.width(Swiss.span(5)).enter(g3, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Label("Apps · by habit at %02d:00".format(snapshot.habitHour))
                         AppsGrid(focus, apps, nUp)
                     }
                 }
-                Footer(focus, nUp + nApps, status.hint, up, apps)
+                Box(Modifier.enter(g4, dy = 0f, fromAlpha = FROM_ALPHA)) {
+                    Footer(focus, nUp + nApps, status.hint, up, apps)
+                }
             }
         }
     }
+}
+
+private const val ENTRANCE_MS = 300
+private const val GROUP_MS = 180
+private const val GROUP_STEP = 30
+private const val FROM_ALPHA = 0.35f
+
+/** Group k's eased 0..1 progress inside the shared entrance timeline. */
+private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
+    val ms = t.value * ENTRANCE_MS - k * GROUP_STEP
+    Motion.EnterEasing.transform((ms / GROUP_MS).coerceIn(0f, 1f))
 }
 
 @Composable
 private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, status: HomeStatus) {
     val i = focused.intValue
     val item = up.getOrNull(if (i < up.size) i else 0)
-    Column(Modifier.widthIn(max = 760.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    // New card under focus: the hero text fades up from 20 % and slides 12 px in from the right.
+    val reduce = LocalReduceMotion.current
+    val swap = remember { Animatable(1f) }
+    val shownKey = remember { arrayOfNulls<String>(1) }
+    val key = item?.key
+    LaunchedEffect(key) {
+        val changed = shownKey[0] != null && shownKey[0] != key
+        shownKey[0] = key
+        if (changed && !reduce) {
+            swap.snapTo(0f)
+            swap.animateTo(1f, Motion.enter(Motion.MEDIUM))
+        }
+    }
+    Column(Modifier.widthIn(max = 760.dp).enter({ swap.value }, dx = 12f, dy = 0f, fromAlpha = 0.2f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (!status.isHome) {
             Label("A TV update reset Home — run setup again.", color = Swiss.Focus)
         }

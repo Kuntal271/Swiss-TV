@@ -6,14 +6,22 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 
 /** Every Intent the launcher fires lives here. */
 class LaunchAdapter(private val context: Context, private val packages: PackagesAdapter) {
     private val pm = context.packageManager
 
+    /**
+     * Activity options for the next start (set by the UI: a scale-up from the clicked tile).
+     * Null or returning null = the system's default transition.
+     */
+    var launchOptions: (() -> Bundle?)? = null
+
     fun start(i: Intent): Boolean = try {
-        context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val opts = try { launchOptions?.invoke() } catch (_: Exception) { null }
+        context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), opts)
         true
     } catch (_: ActivityNotFoundException) {
         false

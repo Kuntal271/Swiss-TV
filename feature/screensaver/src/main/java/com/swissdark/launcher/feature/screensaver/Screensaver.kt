@@ -28,7 +28,15 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import com.swissdark.launcher.core.design.CrossfadeText
 import com.swissdark.launcher.core.design.DesignCanvas
+import com.swissdark.launcher.core.design.Motion
+import com.swissdark.launcher.core.design.enter
+import com.swissdark.launcher.core.design.motionSpec
+import com.swissdark.launcher.core.design.rememberAppear
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.Swiss
@@ -41,14 +49,26 @@ import com.swissdark.launcher.core.design.topRule
 @Composable
 fun ScreensaverContent(bitmap: Bitmap?, caption: String) {
     val now by rememberMinute()
-    val shift = (now.minute % 8) * 6
+    // Drift a few px each minute against burn-in: glides over 2 s instead of jumping (layer translation).
+    val shift by animateFloatAsState((now.minute % 8) * 6f, motionSpec(tween(2_000, easing = Motion.StandardEasing)), label = "drift")
+    // Wallpaper fades up first (slow, it is a screensaver), the clock follows.
+    val wallIn = rememberAppear(Unit, 900, easing = Motion.StandardEasing)
+    val clockIn = rememberAppear(Unit, 600, delay = 300)
     Box(Modifier.fillMaxSize().background(Swiss.Ground)) {
-        if (bitmap != null) Image(remember(bitmap) { bitmap.asImageBitmap() }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (bitmap != null) Image(
+            remember(bitmap) { bitmap.asImageBitmap() }, null,
+            Modifier.fillMaxSize().graphicsLayer { alpha = wallIn.value }, contentScale = ContentScale.Crop,
+        )
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 120.dp, vertical = 88.dp).offset(x = shift.dp, y = (-shift).dp),
+            Modifier.fillMaxSize().padding(horizontal = 120.dp, vertical = 88.dp)
+                .graphicsLayer {
+                    translationX = shift * density
+                    translationY = -shift * density
+                }
+                .enter({ clockIn.value }, dy = 24f),
             verticalArrangement = Arrangement.spacedBy(24.dp, androidx.compose.ui.Alignment.Bottom),
         ) {
-            T(now.format(Fmt.clock), SwissType.Saver)
+            CrossfadeText(now.format(Fmt.clock), SwissType.Saver)
             Row(Modifier.fillMaxWidth().topRule(2.dp, Swiss.Ink).padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(64.dp)) {
                 Label(now.format(Fmt.longDate), color = Swiss.Ink)
                 Label(caption)

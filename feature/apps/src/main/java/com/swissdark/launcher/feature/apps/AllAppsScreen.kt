@@ -23,6 +23,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.Motion
+import com.swissdark.launcher.core.design.drawPop
+import com.swissdark.launcher.core.design.enter
+import com.swissdark.launcher.core.design.rememberAppear
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Frame
 import com.swissdark.launcher.core.design.Header
@@ -74,8 +78,19 @@ fun AllAppsScreen(
     grid.onFocusChanged = { lastId[0] = apps.getOrNull(it)?.id?.component }
     LaunchedEffect(apps) {
         val i = apps.indexOfFirst { it.id.component == lastId[0] }
-        if (i >= 0 && i != grid.focused) grid.focus(i)
+        // While moving, the lifted tile glides to its new slot with the ring.
+        if (i >= 0 && i != grid.focused) grid.focus(i, animate = moving != null)
     }
+    // Move mode lifts the tile: it grows to 1.08 (ring with it) and gains a yellow outline.
+    LaunchedEffect(moving != null) {
+        val target = if (moving != null) 1.08f else Motion.FOCUS_SCALE
+        if (grid.focusScale != target) {
+            grid.focusScale = target
+            grid.focus(grid.focused, animate = true)
+        }
+    }
+    // The grid fades in just after the page itself slides in.
+    val gridIn = rememberAppear(Unit, Motion.MEDIUM, delay = Motion.STAGGER)
     grid.onClick = { i -> apps.getOrNull(i)?.let(actions.launch) }
     grid.onLongClick = { i -> apps.getOrNull(i)?.let { lastId[0] = it.id.component; menuFor = it } }
     grid.onOtherKey = { e ->
@@ -133,7 +148,7 @@ fun AllAppsScreen(
                             SwissType.Body24,
                         )
                     }
-                    Box(Modifier.fillMaxHeight().weight(1f).clipToBounds().focusViewport(grid)) {
+                    Box(Modifier.fillMaxHeight().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
                         Column(Modifier.fillMaxWidth().focusScroll(grid), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                             for (r in 0 until (apps.size + COLS - 1) / COLS) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -149,6 +164,7 @@ fun AllAppsScreen(
                                                 a.pinned -> "Pinned"
                                                 else -> null
                                             },
+                                            outline = moving?.id == a.id,
                                         )
                                     }
                                 }
@@ -158,9 +174,11 @@ fun AllAppsScreen(
                 }
                 val m = menuFor
                 if (m != null) {
+                    // Hold-OK menu pops in: scale 0.96 → 1 with a fade, 160 ms.
+                    val pop = rememberAppear(m, Motion.SHORT)
                     FocusRoot(menu, Swiss.Focus) {
                         Row(
-                            Modifier.fillMaxWidth().topRule(4.dp, Swiss.Focus).background(Swiss.Panel).padding(horizontal = 24.dp, vertical = 18.dp),
+                            Modifier.fillMaxWidth().drawPop({ pop.value }).topRule(4.dp, Swiss.Focus).background(Swiss.Panel).padding(horizontal = 24.dp, vertical = 18.dp),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp),
                         ) {
                             Label(m.label, color = Swiss.Ink, modifier = Modifier.weight(1f))
