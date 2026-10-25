@@ -110,3 +110,18 @@ class BackdropMatchTest {
         assertTrue(spike[1 * w + 4] and 0xFF < 0xFF)
     }
 }
+
+class WebShowNamesTest {
+    @org.junit.Test
+    fun blackCloverFromSearchTitles() {
+        val titles = listOf(
+            "Season 2 Day of Atonement - Watch on Crunchyroll",
+            "Nacht's Day of Atonement | Black Clover Season 2 Episode 4",
+            "Black Clover Season 2, Episode 4 Finally Reveals Nacht's Past ... - CBR",
+            "Black Clover Season 2, Episode 4 Release Date & Time",
+            "Day of Atonement - Black Clover 2x04 | TVmaze",
+        )
+        val names = BackdropMatch.showNamesFromResults(titles, "Day of Atonement")
+        org.junit.Assert.assertEquals("Black Clover", names.first())
+    }
+}

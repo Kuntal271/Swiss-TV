@@ -18,6 +18,18 @@ import org.junit.Test
 class TitleSourcesParseTest {
     private fun res(name: String) = Json.parseToJsonElement(javaClass.classLoader!!.getResource("titles/$name")!!.readText())
 
+    @Test fun imdbPosters_currentUrlsSizedById() {
+        val o = Json.parseToJsonElement(
+            """{"d":[{"i":{"imageUrl":"https://m.media-amazon.com/images/M/MV5BOWE2XkEyXkFqcGc@._V1_.jpg"},"id":"tt0366864"},""" +
+                """{"i":{"imageUrl":"https://m.media-amazon.com/images/M/MV5BNDAx@._V1_CR1894,1,2986,4479_.jpg"},"id":"nm7671150"},""" +
+                """{"id":"tt39794983"},{"i":{"imageUrl":"https://m.media-amazon.com/images/M/MV5BYzlk@._V1_.jpg"},"id":"tt7983428"}],"q":"panchayat","v":1}""",
+        ).jsonObject
+        val p = OmdbParse.imdbPosters(o)
+        assertEquals(setOf("tt0366864", "tt7983428"), p.keys)
+        assertEquals("https://m.media-amazon.com/images/M/MV5BOWE2XkEyXkFqcGc@._V1_SX400.jpg", p["tt0366864"])
+        assertEquals("https://m.media-amazon.com/images/M/MV5BYzlk%40._V1_SX400.jpg", OmdbParse.encode(p["tt7983428"]!!))
+    }
+
     @Test fun ids_roundTrip() {
         assertEquals(-12004706, TitleIds.fromImdb("tt12004706"))
         assertEquals("tt12004706", TitleIds.imdb(-12004706))

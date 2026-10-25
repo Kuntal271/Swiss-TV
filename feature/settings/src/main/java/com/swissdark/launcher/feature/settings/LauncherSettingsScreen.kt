@@ -138,7 +138,7 @@ fun LauncherSettingsScreen(
         nav.cancel()
         if (s != section) {
             section = s
-            focus.scrollY.floatValue = 0f
+            focus.scrollTo(0f, animate = false)
         }
     }
     focus.onFocusChanged = { i ->
@@ -339,7 +339,6 @@ private fun wallpaperSection(
                     }
                 }
             }
-            T("Add your own: adb push photos to ${info.photosPath}, then pick +.", SwissType.Meta)
         }
         val dim = s.dimBySlot[slot.name] ?: 0.45f
         Row(Modifier.fillMaxWidth().topRule().bottomRule(), verticalAlignment = Alignment.CenterVertically) {
@@ -458,8 +457,8 @@ private fun appsSection(s: LauncherSettings, apps: List<AppEntry>, a: SettingsAc
 
 private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
     Column {
-        InfoRow("Home button", if (info.isHome) "Swiss Home" else "Not set to Swiss Home — run setup.sh")
-        InfoRow("Google TV Home", "Off · UNDO=1 ./setup/setup.sh restores it")
+        InfoRow("Home button", if (info.isHome) "Swiss Home" else "Not set to Swiss Home")
+        InfoRow("Google TV Home", "Off")
         InfoRow("Mic", "Google Assistant · Search here: Mic")
         InfoRow("Input", "Inputs panel")
         InfoRow("Menu", "Quick settings · hold: Launcher settings")
@@ -470,8 +469,8 @@ private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
 private fun aboutSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
     Column {
         InfoRow("Version", info.version)
-        InfoRow("Home app", if (info.isHome) "This launcher" else "Not set — run setup.sh")
-        InfoRow("Usage access (habits)", if (info.usageAccess) "Granted" else "Missing — run setup.sh")
+        InfoRow("Home app", if (info.isHome) "This launcher" else "Not set")
+        InfoRow("Usage access (habits)", if (info.usageAccess) "Granted" else "Not granted")
         InfoRow("Watch Next", info.watchNext)
         InfoRow(
             "Titles",

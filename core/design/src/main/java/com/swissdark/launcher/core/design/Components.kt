@@ -168,11 +168,12 @@ data class KeyHint(val key: String, val action: String)
 
 @Composable
 fun Footer(hint: String, keys: List<KeyHint>, modifier: Modifier = Modifier) {
+    // Same bar as Home: key hints first on the left, the focused item's name muted on the right.
     Row(modifier.fillMaxWidth().topRule().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-        T(hint, SwissType.Footer, Modifier.weight(1f), Swiss.Muted, maxLines = 1)
         Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
             for (k in keys) KeyHintText(k)
         }
+        T(hint, SwissType.Footer, Modifier.weight(1f).padding(start = 48.dp), Swiss.Muted, maxLines = 1, align = TextAlign.End)
     }
 }
 

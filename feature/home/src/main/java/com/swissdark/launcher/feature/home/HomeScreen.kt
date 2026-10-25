@@ -226,8 +226,13 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                             }
                         }
                     }
-                    Column(Modifier.weight(1f).enter(g3, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Label("Apps · by habit at %02d:00".format(snapshot.habitHour))
+                    // Right-aligned: the grid's right edge sits on the right margin, under the nav.
+                    Column(
+                        Modifier.weight(1f).enter(g3, dy = 0f, fromAlpha = FROM_ALPHA),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        Label("Apps · by habit at %02d:00".format(snapshot.habitHour), Modifier.width(APP_TILE_W * APP_COLS + 24.dp * (APP_COLS - 1)))
                         AppsGrid(focus, apps, nUp)
                     }
                 }

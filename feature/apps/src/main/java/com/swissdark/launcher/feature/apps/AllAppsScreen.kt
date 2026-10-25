@@ -41,6 +41,7 @@ import com.swissdark.launcher.core.design.rememberMinute
 import com.swissdark.launcher.core.design.topRule
 import com.swissdark.launcher.core.focus.DpadKey
 import com.swissdark.launcher.core.focus.FocusRoot
+import com.swissdark.launcher.core.design.edgeFade
 import com.swissdark.launcher.core.focus.focusScroll
 import com.swissdark.launcher.core.focus.focusViewport
 import com.swissdark.launcher.core.focus.rememberFocusScreen
@@ -141,7 +142,14 @@ fun AllAppsScreen(
             Frame {
                 Header(deviceName.uppercase(), now.format(Fmt.clock), (if (customOrder) "Your order" else "A to Z") + " · $hiddenCount hidden", "All apps")
                 T("All apps · ${apps.size}", SwissType.Row44, maxLines = 1)
-                Box(Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
+                Box(
+                    Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)
+                        .edgeFade(
+                            // Fade an edge only while there are rows beyond it.
+                            topAmount = { grid.scrollY.floatValue / 48f },
+                            bottomAmount = { (grid.contentBottom - grid.scrollY.floatValue - grid.viewportBottom) / 48f },
+                        ),
+                ) {
                     // 12 px of air above the first row so its ring and scale are never clipped.
                     Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                         for (r in 0 until (apps.size + COLS - 1) / COLS) {

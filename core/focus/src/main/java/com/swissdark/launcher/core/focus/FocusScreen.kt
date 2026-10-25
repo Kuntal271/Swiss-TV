@@ -2,6 +2,7 @@ package com.swissdark.launcher.core.focus
 
 import android.view.KeyEvent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
@@ -89,6 +90,7 @@ class FocusScreenState internal constructor(
     private var curTo = 1f
     private var prevFrom = 1f
     private var ringMoves = false
+    private var ringScrolls = false
 
     /** Scale of a focused item that opted in (focusItem(scale = true)). 1 = no scale. */
     var focusScale = 1.04f
@@ -128,6 +130,30 @@ class FocusScreenState internal constructor(
      * scrolling items stay in unscrolled layout space.
      */
     val scrollY = mutableFloatStateOf(0f)
+    /** Where [scrollY] is heading. Focus geometry uses this; drawing uses the animated [scrollY]. */
+    private var scrollTarget = 0f
+    private val scrollAnim = Animatable(0f)
+    private var scrollJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Glides the scroll to [y]: an emphasized-decelerate ease for single presses, a short linear
+     * catch-up while a key is held so the list keeps pace with the focus. Draw phase only.
+     */
+    fun scrollTo(y: Float, animate: Boolean = true, held: Boolean = false) {
+        if (y == scrollTarget && (scrollJob?.isActive == true || y == scrollY.floatValue)) return
+        scrollTarget = y
+        scrollJob?.cancel()
+        if (!animate) {
+            scrollY.floatValue = y
+            return
+        }
+        scrollJob = scope.launch {
+            scrollAnim.snapTo(scrollY.floatValue)
+            val spec = if (held) tween<Float>(SCROLL_HELD_MS, easing = androidx.compose.animation.core.LinearEasing)
+            else tween(SCROLL_MS, easing = ScrollEasing)
+            scrollAnim.animateTo(y, spec) { scrollY.floatValue = value }
+        }
+    }
     var viewportTop = 0f
     var viewportBottom = Float.MAX_VALUE
     /** Bottom of the scrolling content (root px, unscrolled); the scroll never goes past it. */
@@ -229,12 +255,12 @@ class FocusScreenState internal constructor(
     fun focus(index: Int, animate: Boolean = false) {
         if (index < 0 || index >= count) return
         engine.set(index)
-        ensureVisible(index)
+        ensureVisible(index, animate, held = false)
         placeRing(animate)
         onFocusChanged(index)
     }
 
-    private fun ensureVisible(i: Int) {
+    private fun ensureVisible(i: Int, animate: Boolean, held: Boolean) {
         if (!scrolls[i]) return
         val top = rects[i * 4 + 1] - EDGE
         // Below the focused item keep a peek of the next row, but never scroll past the end of
@@ -243,18 +269,22 @@ class FocusScreenState internal constructor(
         val itemBottom = rects[i * 4 + 1] + rects[i * 4 + 3]
         val maxScroll = (maxOf(contentBottom.coerceAtMost(Float.MAX_VALUE / 2), itemBottom) + EDGE - viewportBottom).coerceAtLeast(0f)
         val bottom = itemBottom + PEEK
-        val s = scrollY.floatValue
-        if (bottom - s > viewportBottom) scrollY.floatValue = (bottom - viewportBottom).coerceAtMost(maxScroll)
-        else if (top - s < viewportTop) scrollY.floatValue = (top - viewportTop).coerceAtLeast(0f)
-        else if (s > maxScroll) scrollY.floatValue = maxScroll
+        val s = scrollTarget
+        val y = when {
+            bottom - s > viewportBottom -> (bottom - viewportBottom).coerceAtMost(maxScroll)
+            top - s < viewportTop -> (top - viewportTop).coerceAtLeast(0f)
+            s > maxScroll -> maxScroll
+            else -> return
+        }
+        scrollTo(y, animate, held)
     }
 
     /** The ring's target for item [i]: its rect, grown by the focus scale when the item scales. */
     private fun ringTarget(i: Int) {
         val o = i * 4
-        val dy = if (scrolls[i]) scrollY.floatValue else 0f
         val s = targetScale(i)
         val w = rects[o + 2]; val h = rects[o + 3]
+        val dy = 0f  // scrolling items: content space; drawRing applies the live scroll
         val gx = w * (s - 1f) / 2f; val gy = h * (s - 1f) / 2f
         to[0] = rects[o] - gx; to[1] = rects[o + 1] - dy - gy; to[2] = w + 2 * gx; to[3] = h + 2 * gy
     }
@@ -277,6 +307,12 @@ class FocusScreenState internal constructor(
 
         val ring = styles[i] == FocusStyle.RING
         val wasVisible = ringAlpha.floatValue > 0f
+        // Moving between scrolled and fixed items: carry the ring's on-screen position over.
+        val nowScrolls = scrolls[i]
+        if (nowScrolls != ringScrolls) {
+            ringY.floatValue += if (nowScrolls) scrollY.floatValue else -scrollY.floatValue
+            ringScrolls = nowScrolls
+        }
         if (ring) {
             ringTarget(i)
             ringAlpha.floatValue = 1f
@@ -334,7 +370,7 @@ class FocusScreenState internal constructor(
         val cur = engine.focused.intValue
         if (engine.onKey(dir, repeat)) {
             val next = engine.focused.intValue
-            ensureVisible(next)
+            ensureVisible(next, animate = true, held = repeat)
             // Held keys repeat ~every 50 ms: skip the ring animation so focus never lags.
             placeRing(animate = !repeat)
             onFocusChanged(next)
@@ -384,7 +420,7 @@ class FocusScreenState internal constructor(
         if (st.width != ringStroke) { st = Stroke(width = ringStroke); stroke = st }
         scope.drawRect(
             color = color,
-            topLeft = Offset(ringX.floatValue - off, ringY.floatValue - off),
+            topLeft = Offset(ringX.floatValue - off, ringY.floatValue - off - if (ringScrolls) scrollY.floatValue else 0f),
             size = Size(ringW.floatValue + off * 2, ringH.floatValue + off * 2),
             style = st,
         )
@@ -395,6 +431,9 @@ class FocusScreenState internal constructor(
     private companion object {
         const val EDGE = 24f
         const val PEEK = 120f
+        const val SCROLL_MS = 320
+        const val SCROLL_HELD_MS = 90
+        val ScrollEasing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
     }
 }
 

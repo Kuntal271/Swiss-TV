@@ -6,10 +6,14 @@ import com.swissdark.launcher.domain.Person
 import com.swissdark.launcher.domain.SearchHit
 import com.swissdark.launcher.domain.TitleDetails
 import com.swissdark.launcher.domain.TitleRef
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -50,17 +54,59 @@ class OmdbClient(private val http: OkHttpClient, private val key: () -> String) 
         return o
     }
 
-    suspend fun search(q: String): List<SearchHit.Title> =
-        get(url("s" to q))?.let { withContext(Dispatchers.Default) { OmdbParse.search(it) } }.orEmpty()
+    private val imdbSuggest = "https://v3.sg.media-imdb.com/suggestion/x/".toHttpUrl()
 
-    suspend fun byId(imdbId: String): JsonObject? = get(url("i" to imdbId, "plot" to "full"))
+    /**
+     * IMDb's current poster per IMDb id, from its public suggestion endpoint (no key). OMDb's
+     * Poster field is an old snapshot: for many titles its m.media-amazon.com image id no longer
+     * exists and the CDN answers 404 (blank tiles), while IMDb serves the poster under a new id.
+     * Empty on any failure, so OMDb's URL stays the fallback.
+     */
+    suspend fun imdbPosters(q: String): Map<String, String> = try {
+        val u = imdbSuggest.newBuilder().addPathSegment(q.trim().lowercase() + ".json").build()
+        val (code, body) = http.fetch(Request.Builder().url(u).header("Accept", "application/json").build())
+        if (code !in 200..299) emptyMap()
+        else withContext(Dispatchers.Default) { OmdbParse.imdbPosters(json.parseToJsonElement(body).jsonObject) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
+    /** [o] with its Poster replaced by IMDb's current one, when IMDb has one. */
+    private suspend fun freshPoster(o: JsonObject, fresh: Map<String, String>? = null): JsonObject {
+        val id = o.str("imdbID") ?: return o
+        val url = (fresh ?: imdbPosters(id))[id] ?: return o
+        return JsonObject(o + ("Poster" to JsonPrimitive(url)))
+    }
+
+    suspend fun search(q: String): List<SearchHit.Title> = coroutineScope {
+        val fresh = async { imdbPosters(q) }
+        val hits = get(url("s" to q))?.let { withContext(Dispatchers.Default) { OmdbParse.search(it) } }.orEmpty()
+        if (hits.isEmpty()) {
+            fresh.cancel()
+            return@coroutineScope hits
+        }
+        val p = fresh.await()
+        hits.map { h -> TitleIds.imdb(h.ref.tmdbId)?.let(p::get)?.let { h.copy(posterUrl = OmdbParse.encode(it)) } ?: h }
+    }
+
+    /** [posters] = false skips the IMDb poster refresh (callers that only read ids). */
+    suspend fun byId(imdbId: String, posters: Boolean = true): JsonObject? = coroutineScope {
+        val fresh = if (posters) async { imdbPosters(imdbId) } else null
+        val o = get(url("i" to imdbId, "plot" to "full"))
+        if (o == null) {
+            fresh?.cancel()
+            null
+        } else if (fresh != null) freshPoster(o, fresh.await()) else o
+    }
 
     /** Raw `s=` search restricted to episodes (used by BackdropArt to find the show of an episode name). */
     suspend fun searchEpisodes(q: String): JsonObject? = get(url("s" to q, "type" to "episode"))
 
     suspend fun byTitle(title: String, type: MediaType?): JsonObject? = get(
         url(*listOfNotNull("t" to title, "plot" to "full", type?.let { "type" to if (it == MediaType.MOVIE) "movie" else "series" }).toTypedArray()),
-    )
+    )?.let { freshPoster(it) }
 
     suspend fun season(imdbId: String, season: Int): List<Episode> =
         get(url("i" to imdbId, "Season" to season.toString()))?.let { OmdbParse.season(it, season) }.orEmpty()
@@ -76,11 +122,21 @@ object OmdbParse {
         else -> null // "episode", "game"
     }
 
+    /** Amazon poster URLs carry a raw '@' in the path ("…MV5B…@._V1_SX300.jpg"); kept percent-encoded (the CDN accepts both). */
+    fun encode(url: String): String = url.replace("@", "%40")
+
+    fun poster(o: JsonObject): String? = o.na("Poster")?.takeIf { it.startsWith("http") }?.let(::encode)
+
     /**
-     * Amazon poster URLs carry a raw '@' in the path ("…MV5B…@._V1_SX300.jpg"); Coil's URI
-     * parser takes it for user-info and the image never loads. Percent-encoded, it loads.
+     * IMDb suggestion JSON (`{"d":[{"id":"tt…","i":{"imageUrl":"…@._V1_.jpg"}}]}`) → IMDb id to
+     * poster URL. IMDb returns the full-size original; `._V1_SX400` asks the CDN for 400 px wide.
      */
-    fun poster(o: JsonObject): String? = o.na("Poster")?.takeIf { it.startsWith("http") }?.replace("@", "%40")
+    fun imdbPosters(o: JsonObject): Map<String, String> = o.arr("d").mapNotNull { e ->
+        val h = e as? JsonObject ?: return@mapNotNull null
+        val id = h.str("id")?.takeIf { it.startsWith("tt") } ?: return@mapNotNull null
+        val url = h.obj("i")?.str("imageUrl")?.takeIf { it.startsWith("https://m.media-amazon.com/") } ?: return@mapNotNull null
+        id to if ("._V1" in url) url.substringBefore("._V1") + "._V1_SX400.jpg" else url
+    }.toMap()
 
     fun search(o: JsonObject): List<SearchHit.Title> = o.arr("Search").mapNotNull { e ->
         val h = e as? JsonObject ?: return@mapNotNull null

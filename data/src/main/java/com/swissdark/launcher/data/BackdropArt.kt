@@ -58,7 +58,7 @@ class BackdropArt(
     private val dim: () -> Float,
 ) {
     private val io = Dispatchers.IO.limitedParallelism(1)
-    private val prefs = context.getSharedPreferences("backdrops", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("backdrops2", Context.MODE_PRIVATE)  // v2: misses from before web lookup are retried
     private val cache = LruCache<String, PreparedBackdrop>(3)
     private val lock = Mutex()
 
@@ -163,14 +163,37 @@ class BackdropArt(
         if (sources.omdb.hasKey) {
             val res = runCatching { sources.omdb.searchEpisodes(ep) }.getOrNull()
             for (imdbEp in BackdropMatch.omdbEpisodeIds(res, ep).take(4)) {
-                val series = runCatching { sources.omdb.byId(imdbEp) }.getOrNull()?.str("seriesID") ?: continue
+                val series = runCatching { sources.omdb.byId(imdbEp, posters = false) }.getOrNull()?.str("seriesID") ?: continue
                 runCatching { sources.tvmaze.lookupImdb(series) }.getOrNull()?.int("id")?.let { candidates += it }
             }
         }
-        val shows = candidates.take(5).mapNotNull { runCatching { sources.tvmaze.show(it) }.getOrNull() }
-        val show = BackdropMatch.pickByEpisode(shows, ep, item.season, item.episode) ?: return null
+        var shows = candidates.take(5).mapNotNull { runCatching { sources.tvmaze.show(it) }.getOrNull() }
+        var show = BackdropMatch.pickByEpisode(shows, ep, item.season, item.episode)
+        if (show == null) {
+            // Nothing we know has that episode: ask the web which show it belongs to ("Day of
+            // Atonement" → "Black Clover Season 2 Episode 4"), then let TVmaze's episode list confirm.
+            val names = runCatching { webShowNames(ep, item.serviceName) }.getOrDefault(emptyList())
+            val ids = LinkedHashSet<Int>()
+            for (n in names.take(3)) {
+                runCatching { sources.tvmaze.searchShows(n) }.getOrNull()?.take(2)?.forEach { (_, o) ->
+                    (o["show"] as? JsonObject ?: o).int("id")?.let { if (it !in candidates) ids += it }
+                }
+            }
+            shows = ids.take(5).mapNotNull { runCatching { sources.tvmaze.show(it) }.getOrNull() }
+            show = BackdropMatch.pickByEpisode(shows, ep, item.season, item.episode)
+        }
+        if (show == null) return null
         rememberShow(item, show.int("id"))
         return BackdropMatch.imageFor(show)
+    }
+
+    /** Show names that web results pair with this episode title, most frequent first. */
+    private suspend fun webShowNames(episode: String, service: String): List<String> {
+        val q = java.net.URLEncoder.encode("\"$episode\" $service episode", "UTF-8")
+        val req = Request.Builder().url("https://html.duckduckgo.com/html/?q=$q")
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 12) SwissHome").build()
+        val html = String(fetchBytes(req), Charsets.UTF_8)
+        return BackdropMatch.showNamesFromResults(BackdropMatch.resultTitles(html), episode)
     }
 
     private fun rememberShow(item: ContinueItem, id: Int?) {
@@ -250,8 +273,10 @@ class BackdropArt(
     }
 
     /** OkHttp (with its disk cache) on its own threads; bytes decoded by ImageDecoder, not Coil. */
-    private suspend fun fetchBytes(url: String): ByteArray {
-        val call = http.newCall(Request.Builder().url(url).build())
+    private suspend fun fetchBytes(url: String): ByteArray = fetchBytes(Request.Builder().url(url).build())
+
+    private suspend fun fetchBytes(request: Request): ByteArray {
+        val call = http.newCall(request)
         return suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
@@ -345,6 +370,35 @@ object BackdropMatch {
     }
 
     /** imdb ids of OMDb episode search hits whose title equals [episodeName]. */
+    private val RESULT = Regex("""class="result__a"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+    private val TAGS = Regex("<[^>]+>")
+    private val SHOW_PATTERNS = listOf(
+        Regex("""^(.+?)\s+Season\s+\d+""", RegexOption.IGNORE_CASE),                 // "Black Clover Season 2, Episode 4 …"
+        Regex("""[|–—-]\s*(.+?)\s+Season\s+\d+""", RegexOption.IGNORE_CASE),        // "… | Black Clover Season 2 Episode 4"
+        Regex("""[–—-]\s*(.+?)\s+\d+x\d+\s*\|\s*TVmaze""", RegexOption.IGNORE_CASE), // "Day of Atonement - Black Clover 2x04 | TVmaze"
+        Regex("""^(.+?)\s+(?:Episode|Ep\.?)\s+\d+""", RegexOption.IGNORE_CASE),       // "Black Clover Episode 174"
+    )
+
+    fun resultTitles(html: String): List<String> = RESULT.findAll(html).map {
+        android.text.Html.fromHtml(TAGS.replace(it.groupValues[1], ""), android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim()
+    }.toList()
+
+    /** Candidate show names from search-result titles, most frequent first; the episode itself excluded. */
+    fun showNamesFromResults(titles: List<String>, episode: String): List<String> {
+        val ne = norm(episode)
+        val counts = LinkedHashMap<String, Pair<String, Int>>()
+        for (t in titles) for (p in SHOW_PATTERNS) {
+            val raw = p.find(t)?.groupValues?.get(1)?.trim()?.trim('"', '\'', '“', '”', ',', ':') ?: continue
+            // Strip a leading episode name ("Nacht's Day of Atonement | Black Clover" style handled by patterns).
+            val name = raw.substringAfterLast(" | ").substringAfterLast(" - ").trim()
+            val n = norm(name)
+            if (n.isEmpty() || n == ne || ne.contains(n) || n.length > 60) continue
+            val c = counts[n]
+            counts[n] = (c?.first ?: name) to ((c?.second ?: 0) + 1)
+        }
+        return counts.values.sortedByDescending { it.second }.map { it.first }
+    }
+
     fun omdbEpisodeIds(res: JsonObject?, episodeName: String): List<String> {
         val q = norm(episodeName)
         return res?.arr("Search").orEmpty().mapNotNull { it as? JsonObject }

@@ -88,7 +88,8 @@ class TitleSources(
     }
 
     /** Cache keys for lists differ per source so a switch to TMDB does not serve fallback lists. */
-    suspend fun cacheTag(): String = if (useTmdb()) "" else "\u001Falt"
+    // "alt2": lists cached before OMDb posters were refreshed from IMDb carry dead poster URLs.
+    suspend fun cacheTag(): String = if (useTmdb()) "" else "\u001Falt2"
 
     // ---- What TVmaze told us about each title: availability and show id for later lookups ----
     private val availById = LruCache<Int, List<Availability>>(600)

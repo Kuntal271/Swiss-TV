@@ -139,3 +139,39 @@ fun CrossfadeText(text: String, style: androidx.compose.ui.text.TextStyle, modif
  * app's route layer to screens that animate their own parts (side panels); 1 elsewhere.
  */
 val LocalScreenProgress = staticCompositionLocalOf<() -> Float> { { 1f } }
+
+/**
+ * Soft top and bottom edges for a scrolling viewport: rows dissolve into the background instead
+ * of being cut. Each fade only shows when there is content beyond that edge ([topAmount] and
+ * [bottomAmount] are 0..1, read in the draw phase). One offscreen layer; nothing recomposes.
+ */
+fun Modifier.edgeFade(
+    topAmount: () -> Float,
+    bottomAmount: () -> Float,
+    fadePx: Float = 72f,
+): Modifier = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val t = topAmount().coerceIn(0f, 1f)
+        val b = bottomAmount().coerceIn(0f, 1f)
+        val h = fadePx.coerceAtMost(size.height / 3f)
+        if (t > 0f) drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to androidx.compose.ui.graphics.Color.Black.copy(alpha = t),
+                1f to androidx.compose.ui.graphics.Color.Transparent,
+                startY = 0f, endY = h,
+            ),
+            size = androidx.compose.ui.geometry.Size(size.width, h),
+            blendMode = androidx.compose.ui.graphics.BlendMode.DstOut,
+        )
+        if (b > 0f) drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to androidx.compose.ui.graphics.Color.Transparent,
+                1f to androidx.compose.ui.graphics.Color.Black.copy(alpha = b),
+                startY = size.height - h, endY = size.height,
+            ),
+            topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - h),
+            size = androidx.compose.ui.geometry.Size(size.width, h),
+            blendMode = androidx.compose.ui.graphics.BlendMode.DstOut,
+        )
+    }
