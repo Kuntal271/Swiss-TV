@@ -363,14 +363,21 @@ class FocusScreenState internal constructor(
         progress.floatValue = 0f
         animJob = scope.launch {
             anim.snapTo(0f)
-            anim.animateTo(1f, tween(RING_MS, easing = ScrollEasing)) {
+            anim.animateTo(1f, tween(if (ringScrolls) RING_SCROLL_MS else RING_MS, easing = ScrollEasing)) {
                 val t = value
                 progress.floatValue = t
                 if (ringMoves) {
-                    ringX.floatValue = from[0] + (to[0] - from[0]) * t
-                    ringY.floatValue = from[1] + (to[1] - from[1]) * t
                     ringW.floatValue = from[2] + (to[2] - from[2]) * t
                     ringH.floatValue = from[3] + (to[3] - from[3]) * t
+                    if (ringScrolls) {
+                        // Tiles in a scrolling grid: the ring sits on the new tile at once (growing with
+                        // its scale), never half-way between two rows, however fast the presses come.
+                        ringX.floatValue = to[0] + (to[2] - ringW.floatValue) / 2f
+                        ringY.floatValue = to[1] + (to[3] - ringH.floatValue) / 2f
+                    } else {
+                        ringX.floatValue = from[0] + (to[0] - from[0]) * t
+                        ringY.floatValue = from[1] + (to[1] - from[1]) * t
+                    }
                 }
             }
         }
@@ -468,6 +475,7 @@ class FocusScreenState internal constructor(
         const val EDGE = 24f
         const val PEEK = 120f
         const val RING_MS = 180
+        const val RING_SCROLL_MS = 120     // items in a scrolling grid: the ring grows with the tile's scale
         const val SCROLL_MS = 320
         const val SCROLL_HELD_MS = 90
         val ScrollEasing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
