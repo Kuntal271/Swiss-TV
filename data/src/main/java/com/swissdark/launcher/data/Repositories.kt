@@ -1,0 +1,295 @@
+package com.swissdark.launcher.data
+
+import android.content.Context
+import com.swissdark.launcher.core.perf.Sections
+import com.swissdark.launcher.core.perf.traced
+import com.swissdark.launcher.domain.AppEntry
+import com.swissdark.launcher.domain.AppId
+import com.swissdark.launcher.domain.AppsRepository
+import com.swissdark.launcher.domain.ContinueItem
+import com.swissdark.launcher.domain.ContinueSource
+import com.swissdark.launcher.domain.HeroInfo
+import com.swissdark.launcher.domain.HomeRepository
+import com.swissdark.launcher.domain.HomeSnapshot
+import com.swissdark.launcher.domain.MediaType
+import com.swissdark.launcher.domain.Providers
+import com.swissdark.launcher.domain.RefreshReason
+import com.swissdark.launcher.domain.TimeSlot
+import com.swissdark.launcher.domain.TitleRef
+import com.swissdark.launcher.domain.hero
+import com.swissdark.launcher.platform.tv.PackagesAdapter
+import com.swissdark.launcher.platform.tv.UsageAdapter
+import com.swissdark.launcher.platform.tv.WatchNextAdapter
+import com.swissdark.launcher.platform.tv.WatchNextRow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.LocalTime
+
+/** Tabler glyph per package. Unknown apps get the generic app glyph. */
+object AppGlyphs {
+    private val map = mapOf(
+        "com.netflix.ninja" to "netflix",
+        "com.google.android.youtube.tv" to "youtube",
+        "com.amazon.amazonvideo.livingroom" to "prime",
+        "com.jio.media.stb.ondemand" to "jiohotstar",
+        "in.startv.hotstar" to "jiohotstar",
+        "com.spotify.tv.android" to "spotify",
+        "com.android.tv.settings" to "settings",
+        "com.google.android.youtube.tvkids" to "youtube_kids",
+        "com.google.android.youtube.tvmusic" to "youtube_music",
+        "com.apple.atve.androidtv.appletv" to "appletv",
+        "com.tcl.ui_mediaCenter" to "files",
+        "com.android.vending" to "playstore",
+        "org.xbmc.kodi" to "kodi",
+        "com.plexapp.android" to "plex",
+        "com.sonyliv" to "sonyliv",
+        "org.videolan.vlc" to "vlc",
+        "com.graymatrix.did" to "zee5",
+        "com.tcl.browser" to "world",
+        "com.google.android.play.games" to "gamepad",
+        "com.google.android.videos" to "play_circle",
+        "com.crunchyroll.crunchyroid" to "play_circle",
+        "com.yablio.sendfilestotv" to "send",
+        "com.tcl.magiconnectfree" to "cast",
+        "com.tcl.tv" to "antenna",
+        "com.tcl.guard" to "shield",
+        "com.tcl.ocean.instructions" to "info",
+        "com.tcl.smartalexa" to "mic",
+        "com.tcl.dashboard" to "dashboard",
+        "com.tcl.exhibit" to "photo",
+    )
+
+    fun of(pkg: String): String = map[pkg] ?: "apps"
+}
+
+class AppsRepositoryImpl(
+    private val packages: PackagesAdapter,
+    private val settings: SettingsStore,
+    private val scope: CoroutineScope,
+) : AppsRepository {
+    private val _apps = MutableStateFlow<List<AppEntry>>(emptyList())
+    override val apps: StateFlow<List<AppEntry>> = _apps
+
+    fun reload() {
+        val s = settings.settings.value
+        val pinned = s.pinned.toHashSet()
+        val list = packages.launchable().map {
+            AppEntry(AppId(it.component), it.label, AppGlyphs.of(it.packageName), it.packageName in pinned)
+        }
+        val order = s.customOrder
+        _apps.value = if (order.isEmpty()) list.sortedBy { it.label.lowercase() }
+        else list.sortedWith(compareBy<AppEntry> { order.indexOf(it.id.packageName).let { i -> if (i < 0) Int.MAX_VALUE else i } }.thenBy { it.label.lowercase() })
+    }
+
+    fun visible(): List<AppEntry> {
+        val hidden = settings.settings.value.hidden.toHashSet()
+        return _apps.value.filter { it.id.packageName !in hidden }
+    }
+
+    override fun setPinned(id: AppId, pinned: Boolean) {
+        settings.update { s ->
+            val p = s.pinned.filter { it != id.packageName }
+            s.copy(pinned = if (pinned) p + id.packageName else p)
+        }
+        scope.launch(Dispatchers.Default) { reload() }
+    }
+
+    override fun setHidden(id: AppId, hidden: Boolean) {
+        settings.update { s ->
+            val h = s.hidden.filter { it != id.packageName }
+            s.copy(hidden = if (hidden) h + id.packageName else h)
+        }
+        scope.launch(Dispatchers.Default) { reload() }
+    }
+
+    override fun move(id: AppId, delta: Int) {
+        val current = visible().map { it.id.packageName }.toMutableList()
+        val i = current.indexOf(id.packageName)
+        val j = (i + delta).coerceIn(0, current.size - 1)
+        if (i < 0 || i == j) return
+        current.removeAt(i); current.add(j, id.packageName)
+        settings.update { it.copy(customOrder = current) }
+        reload()
+    }
+}
+
+/**
+ * Builds HomeSnapshot on one background thread from every source. Publishes only when the
+ * result differs; writes the L2 file 2 s later. The UI never waits on any of this.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class HomeRepositoryImpl(
+    context: Context,
+    private val scope: CoroutineScope,
+    private val settings: SettingsStore,
+    private val apps: AppsRepositoryImpl,
+    private val habits: HabitStore,
+    private val usage: UsageAdapter,
+    private val watchNext: WatchNextAdapter,
+    private val dao: LauncherDao,
+    private val store: SnapshotStore,
+) : HomeRepository {
+    private val worker = Dispatchers.Default.limitedParallelism(1)
+    private val prefs = context.getSharedPreferences("home", Context.MODE_PRIVATE)
+    private val _snapshot = MutableStateFlow(store.read() ?: HomeSnapshot.EMPTY.copy(slot = TimeSlot.at(LocalTime.now())))
+    override val snapshot: StateFlow<HomeSnapshot> = _snapshot
+    private var lastRanking = 0L
+
+    @Volatile var watchNextStatus: String = "not checked"
+        private set
+
+    override suspend fun refresh(reason: RefreshReason) = withContext(worker) {
+        traced(Sections.SNAPSHOT_BUILD) {
+            if (reason == RefreshReason.PACKAGES_CHANGED || reason == RefreshReason.COLD_START || apps.apps.value.isEmpty()) apps.reload()
+            ingestUsage(force = reason != RefreshReason.RESUMED)
+            val next = build()
+            val cur = _snapshot.value
+            if (next.copy(version = cur.version) != cur) {
+                val published = next.copy(version = cur.version + 1)
+                _snapshot.value = published
+                store.writeDebounced(published)
+            }
+        }
+    }
+
+    override fun removeFromUpNext(item: ContinueItem) {
+        settings.update { it.copy(removedUpNext = (it.removedUpNext + item.key).takeLast(100)) }
+        if (item.source == ContinueSource.HISTORY) scope.launch { dao.deleteHistory(item.key) }
+        scope.launch { refresh(RefreshReason.SETTINGS_CHANGED) }
+    }
+
+    /** Habit ranking: at most once per 10 min on resume, always on other triggers. */
+    private fun ingestUsage(force: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastRanking < 10 * 60_000L) return
+        lastRanking = now
+        if (!usage.hasAccess()) return
+        if (!habits.seeded) {
+            val from = now - 30L * 86_400_000L
+            habits.seed(usage.launches(from, now).map { it.packageName to it.timeMillis })
+            prefs.edit().putLong("ingested", now).apply()
+        } else {
+            val since = prefs.getLong("ingested", now - 86_400_000L)
+            for (l in usage.launches(since, now)) habits.record(l.packageName, l.timeMillis)
+            prefs.edit().putLong("ingested", now).apply()
+        }
+        habits.decay(now)
+        habits.save()
+    }
+
+    private suspend fun build(): HomeSnapshot {
+        val now = System.currentTimeMillis()
+        val time = LocalTime.now()
+        val s = settings.settings.value
+        val visible = apps.visible()
+        val byPkg = visible.associateBy { it.id.packageName }
+        val ranked = habits.rank(visible.map { it.id.packageName }, s.pinned, now)
+            .mapNotNull { byPkg[it] }.take(6)
+
+        val removed = s.removedUpNext.toHashSet()
+        val items = ArrayList<ContinueItem>(3)
+        if (s.showUpNext) {
+            when (val wn = watchNext.read()) {
+                is WatchNextAdapter.Result.Rows -> {
+                    watchNextStatus = "open (${wn.rows.size} rows)"
+                    for (r in wn.rows) {
+                        val item = fromWatchNext(r, byPkg) ?: continue
+                        if (item.key !in removed && items.none { it.key == item.key }) items.add(item)
+                        if (items.size == 3) break
+                    }
+                }
+                is WatchNextAdapter.Result.Closed -> watchNextStatus = "closed: ${wn.why}"
+            }
+            if (items.size < 3) {
+                // Fallback: titles opened from this launcher, then last-used apps.
+                for (h in dao.history(10)) {
+                    val key = h.key
+                    if (key in removed || items.any { it.key == key }) continue
+                    val svc = Providers.byPackage(h.servicePackage)?.name ?: byPkg[h.servicePackage]?.label ?: h.servicePackage
+                    items.add(
+                        ContinueItem(
+                            key = key,
+                            title = TitleRef(h.tmdbId, MediaType.valueOf(h.type), h.name),
+                            service = AppId(h.serviceComponent),
+                            serviceName = svc,
+                            name = h.name,
+                            meta = if (h.savedForLater) "$svc · Saved for later" else "$svc · ${ago(now - h.openedAt)}",
+                            progress = null,
+                            artKey = h.art ?: "banner:${h.servicePackage}",
+                            source = ContinueSource.HISTORY,
+                        ),
+                    )
+                    if (items.size == 3) break
+                }
+            }
+            if (items.size < 3) {
+                val recent = visible.map { it to habits.lastUsed(it.id.packageName) }
+                    .filter { it.second > 0 && it.first.id.packageName != "com.android.tv.settings" }
+                    .sortedByDescending { it.second }
+                for ((app, t) in recent) {
+                    val key = "app:" + app.id.packageName
+                    if (key in removed || items.any { it.service.packageName == app.id.packageName && it.source != ContinueSource.HISTORY }) continue
+                    items.add(
+                        ContinueItem(
+                            key = key, title = null, service = app.id, serviceName = app.label,
+                            name = app.label, meta = "Last used · ${ago(now - t)}", progress = null,
+                            artKey = "banner:" + app.id.packageName, source = ContinueSource.APP,
+                        ),
+                    )
+                    if (items.size == 3) break
+                }
+            }
+        }
+
+        val first = items.firstOrNull()
+        val hero = first?.let { heroFor(it) }
+        return HomeSnapshot(
+            version = 0,
+            slot = TimeSlot.at(time),
+            upNext = items,
+            apps = ranked,
+            hero = hero,
+            habitHour = time.hour,
+        )
+    }
+
+    private fun fromWatchNext(r: WatchNextRow, byPkg: Map<String, AppEntry>): ContinueItem? {
+        val app = byPkg[r.packageName] ?: return null
+        val svc = Providers.byPackage(r.packageName)?.name ?: app.label
+        val progress = if (r.durationMs > 0) (r.positionMs.toFloat() / r.durationMs).coerceIn(0f, 1f) else null
+        val left = if (r.durationMs > 0) ((r.durationMs - r.positionMs) / 60_000L).toInt() else null
+        val s = r.season?.toIntOrNull(); val e = r.episode?.toIntOrNull()
+        val meta = when {
+            s != null && e != null -> "$svc · S$s E$e"
+            left != null -> "$svc · ${duration(left)} left"
+            else -> svc
+        }
+        return ContinueItem(
+            key = "wn:" + r.id, title = null, service = app.id, serviceName = svc,
+            name = r.title, meta = meta, progress = progress?.takeIf { it > 0f },
+            artKey = r.artUri ?: "banner:" + r.packageName, source = ContinueSource.WATCH_NEXT,
+            intentUri = r.intentUri, season = s, episode = e, minutesLeft = left,
+        )
+    }
+
+    companion object {
+        fun heroFor(it: ContinueItem): HeroInfo = it.hero()
+
+        fun duration(min: Int): String = if (min >= 60) "${min / 60}h %02dm".format(min % 60) else "$min min"
+
+        fun ago(ms: Long): String {
+            val m = ms / 60_000L
+            return when {
+                m < 2 -> "just now"
+                m < 60 -> "$m min ago"
+                m < 48 * 60 -> "${m / 60} h ago"
+                else -> "${m / (24 * 60)} days ago"
+            }
+        }
+    }
+}

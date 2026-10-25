@@ -1,0 +1,6 @@
+# Home path compiled ahead of time on install (profileinstaller). Wildcards cover our code;
+# Compose and AndroidX ship their own profiles.
+HSPLcom/swissdark/launcher/**->**(**)**
+Lcom/swissdark/launcher/**;
+HSPLkotlinx/coroutines/**->**(**)**
+HSPLkotlinx/serialization/**->**(**)**

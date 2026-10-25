@@ -1,0 +1,211 @@
+package com.swissdark.launcher.feature.home
+
+import android.view.KeyEvent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.Fmt
+import com.swissdark.launcher.core.design.Frame
+import com.swissdark.launcher.core.design.Header
+import com.swissdark.launcher.core.design.IconTile
+import com.swissdark.launcher.core.design.Label
+import com.swissdark.launcher.core.design.PosterCard
+import com.swissdark.launcher.core.design.ProgressBar
+import com.swissdark.launcher.core.design.Swiss
+import com.swissdark.launcher.core.design.SwissType
+import com.swissdark.launcher.core.design.T
+import com.swissdark.launcher.core.design.TabText
+import com.swissdark.launcher.core.design.rememberMinute
+import com.swissdark.launcher.core.design.topRule
+import com.swissdark.launcher.core.focus.DpadKey
+import com.swissdark.launcher.core.focus.FocusRoot
+import com.swissdark.launcher.core.focus.rememberFocusScreen
+import com.swissdark.launcher.domain.AppEntry
+import com.swissdark.launcher.domain.ContinueItem
+import com.swissdark.launcher.domain.HomeSnapshot
+import com.swissdark.launcher.domain.PreparedWallpaper
+import com.swissdark.launcher.domain.TimeSlot
+import com.swissdark.launcher.domain.hero
+import androidx.compose.foundation.layout.padding
+
+@Immutable
+class HomeActions(
+    val openItem: (ContinueItem) -> Unit,
+    val removeItem: (ContinueItem) -> Unit,
+    val launchApp: (AppEntry) -> Unit,
+    val pinApp: (AppEntry) -> Unit,
+    val allApps: () -> Unit,
+    val search: () -> Unit,
+    val inputs: () -> Unit,
+    val quickSettings: () -> Unit,
+)
+
+@Immutable
+class HomeStatus(val deviceName: String, val network: String, val isHome: Boolean, val input: String, val hint: String)
+
+private val links = listOf("Search", "All apps", "Inputs", "Settings")
+
+/**
+ * Home. One screen for all four times of day: only the wallpaper and the habit ranking change.
+ * A press moves one integer; the hero text reads the focused card from the snapshot.
+ */
+@Composable
+fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean) {
+    val up = snapshot.upNext
+    val apps = snapshot.apps
+    val nUp = up.size
+    val nApps = apps.size
+    val count = nUp + nApps + links.size
+    val focus = rememberFocusScreen(count, initial = 0, active = active)
+    val now by rememberMinute()
+
+    focus.onClick = { i ->
+        when {
+            i < nUp -> actions.openItem(up[i])
+            i < nUp + nApps -> actions.launchApp(apps[i - nUp])
+            else -> when (i - nUp - nApps) {
+                0 -> actions.search()
+                1 -> actions.allApps()
+                2 -> actions.inputs()
+                else -> actions.quickSettings()
+            }
+        }
+    }
+    focus.onLongClick = { i ->
+        when {
+            i < nUp -> actions.removeItem(up[i])
+            i < nUp + nApps -> actions.pinApp(apps[i - nUp])
+        }
+    }
+    focus.onEdge = { _, _: DpadKey -> false }
+    // A new snapshot never moves focus out from under the user: it follows the item's id.
+    val keys = remember(up, apps) { up.map { it.key } + apps.map { it.id.component } + links }
+    val lastKey = remember { arrayOfNulls<String>(1) }
+    focus.onFocusChanged = { lastKey[0] = keys.getOrNull(it) }
+    LaunchedEffect(keys) {
+        val idx = keys.indexOf(lastKey[0])
+        if (idx >= 0 && idx != focus.focused) focus.focus(idx)
+    }
+    focus.onOtherKey = { e ->
+        if (e.action != KeyEvent.ACTION_UP) e.keyCode == KeyEvent.KEYCODE_BACK
+        else when (e.keyCode) {
+            KeyEvent.KEYCODE_SEARCH -> { actions.search(); true }
+            KeyEvent.KEYCODE_TV_INPUT -> { actions.inputs(); true }
+            KeyEvent.KEYCODE_SETTINGS, KeyEvent.KEYCODE_MENU -> { actions.quickSettings(); true }
+            KeyEvent.KEYCODE_BACK -> true          // Home is the bottom of the stack
+            else -> false
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Backdrop(wallpaper)
+        FocusRoot(focus, Swiss.Focus) {
+            Frame {
+                Header(status.deviceName.uppercase(), now.format(Fmt.headerDate), status.network, "Home")
+                // Clock, hero, caption
+                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
+                    Column(Modifier.width(Swiss.span(6)).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            T(now.format(Fmt.clock), SwissType.Clock)
+                            Label(now.format(Fmt.longDate))
+                        }
+                        Hero(focus.engine.focused, up, status)
+                    }
+                    Box(Modifier.fillMaxHeight().weight(1f), contentAlignment = Alignment.BottomEnd) {
+                        T(caption(wallpaper), SwissType.Meta, maxLines = 1)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
+                    Column(Modifier.width(Swiss.span(7)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Label("Up next")
+                        if (up.isEmpty()) {
+                            T("Nothing to continue yet. Titles you open from Search show up here.", SwissType.Body22, Modifier.padding(vertical = 60.dp))
+                        } else Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            for ((i, item) in up.withIndex()) {
+                                PosterCard(
+                                    focus, i, item.artKey, 150.dp, item.name, item.meta,
+                                    Modifier.weight(1f), progress = item.progress,
+                                )
+                            }
+                            repeat(3 - up.size) { Box(Modifier.weight(1f)) }
+                        }
+                    }
+                    Column(Modifier.width(Swiss.span(5)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Label("Apps · by habit at %02d:00".format(snapshot.habitHour))
+                        AppsGrid(focus, apps, nUp)
+                    }
+                }
+                Footer(focus, nUp + nApps, status.hint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, status: HomeStatus) {
+    val i = focused.intValue
+    val item = up.getOrNull(if (i < up.size) i else 0)
+    Column(Modifier.widthIn(max = 760.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (!status.isHome) {
+            Label("A TV update reset Home — run setup again.", color = Swiss.Focus)
+        }
+        if (item != null) {
+            val h = item.hero()
+            Label(h.label, color = Swiss.Focus)
+            T(h.title, SwissType.Hero, maxLines = 2)
+            T(h.meta, SwissType.Meta22, maxLines = 1)
+            if (h.progress != null) ProgressBar(h.progress!!, Swiss.Ink)
+        }
+    }
+}
+
+@Composable
+private fun AppsGrid(focus: com.swissdark.launcher.core.focus.FocusScreenState, apps: List<AppEntry>, base: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        for (row in 0 until 2) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                for (col in 0 until 3) {
+                    val k = row * 3 + col
+                    val a = apps.getOrNull(k)
+                    if (a == null) Box(Modifier.weight(1f)) else IconTile(
+                        focus, base + k, a.icon, a.label, 112.dp, Modifier.weight(1f),
+                        badge = if (a.pinned) "Pin" else null,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Footer(focus: com.swissdark.launcher.core.focus.FocusScreenState, base: Int, hint: String) {
+    Row(Modifier.fillMaxWidth().topRule().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        T(hint, SwissType.Footer, Modifier.weight(1f), Swiss.Muted, maxLines = 1)
+        Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
+            for ((k, l) in links.withIndex()) {
+                TabText(focus, base + k, l, selected = false, style = SwissType.Footer, unselected = Swiss.Ink, underline = 3.dp)
+            }
+        }
+    }
+}
+
+private fun caption(w: PreparedWallpaper): String {
+    val slot: TimeSlot = w.slot
+    val name = w.wallpaper?.name ?: "No wallpaper yet — run setup.sh"
+    return "${slot.label} ${slot.range} · $name" + if (w.wallpaper?.is4k == true) " · 4K" else ""
+}
