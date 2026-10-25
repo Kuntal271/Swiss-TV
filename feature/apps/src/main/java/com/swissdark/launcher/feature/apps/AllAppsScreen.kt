@@ -58,6 +58,7 @@ class AllAppsActions(
 )
 
 private const val COLS = 5
+private val EDGE_INSET = 16.dp
 
 /** A to Z (or your order once you move something). Hidden apps and disabled bloat never show. */
 @Composable
@@ -161,7 +162,9 @@ fun AllAppsScreen(
                         ),
                 ) {
                     // 12 px of air above the first row so its ring and scale are never clipped.
-                    Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                    // 16 px in at each side: a focused edge tile's ring (1.04 scale + 6 px gap + 4 px
+                    // stroke) then ends on the page margins, symmetric, not past them.
+                    Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp, start = EDGE_INSET, end = EDGE_INSET), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                         for (r in 0 until (apps.size + COLS - 1) / COLS) {
                             Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                                 for (c in 0 until COLS) {

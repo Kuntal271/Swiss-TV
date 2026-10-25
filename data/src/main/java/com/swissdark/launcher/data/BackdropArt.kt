@@ -87,6 +87,18 @@ class BackdropArt(
 
     fun trim() = cache.evictAll()
 
+    /**
+     * The show's own picture for a card that has none of its own (Crunchyroll publishes only the
+     * episode name): the same lookup the backdrop uses, so it is remembered for both. Never throws.
+     */
+    suspend fun showArtUrl(item: ContinueItem): String? = try {
+        resolveUrl(item)?.first
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
     private fun dimLevel(): Float = maxOf(dim(), MIN_DIM)
 
     private fun cacheKey(item: ContinueItem, d: Float) = item.key + "|" + BackdropMatch.norm(item.name) + "|" + item.artKey + "|" + d

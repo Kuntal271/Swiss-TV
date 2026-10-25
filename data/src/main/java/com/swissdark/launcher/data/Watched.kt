@@ -200,6 +200,15 @@ class WatchedStore(
         db.dao().recent(n).also { rows -> for (r in rows) known[r.key] = r }
     }
 
+    /** The show's picture found online for row [key] (see BackdropArt.showArtUrl): the card's art from now on. */
+    suspend fun setShowArt(key: String, url: String) = withContext(writer) {
+        val cur = db.dao().get(key) ?: return@withContext
+        if (cur.tmdbArt == url) return@withContext
+        val next = cur.copy(tmdbArt = url)
+        db.dao().put(next); known[key] = next
+        onChanged()
+    }
+
     fun delete(key: String) {
         known.remove(key)
         scope.launch(writer) { db.dao().delete(key) }

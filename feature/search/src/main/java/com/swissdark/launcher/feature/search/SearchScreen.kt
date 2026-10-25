@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
@@ -284,8 +285,30 @@ fun SearchScreen(
             hideIme()
         }
     }
+    // The TV's keyboard (TCL) comes back for a moment after a hide sent from inside its own
+    // Enter/Search key, and Compose re-shows it while the field still holds focus: after a
+    // search, drop the field's focus and keep hiding over the next few frames.
+    var imeSettle by remember { mutableStateOf(0) }
+    LaunchedEffect(imeSettle) {
+        if (imeSettle == 0) return@LaunchedEffect
+        repeat(4) {
+            withFrameNanos { }
+            if (!editing) hideIme()
+        }
+        delay(150)
+        if (!editing) hideIme()
+        delay(350)
+        if (!editing) hideIme()
+    }
+    fun submitted() {
+        editing = false
+        focusManager.clearFocus(force = true)
+        hideIme()
+        imeSettle++
+        wantFirst = true
+    }
     DisposableEffect(Unit) {
-        SearchInput.onImeClosed = { hideIme() }
+        SearchInput.onImeClosed = { hideIme(); imeSettle++ }
         onDispose {
             SearchInput.onImeClosed = null
             SearchInput.editing = false
@@ -489,14 +512,16 @@ fun SearchScreen(
                             BasicTextField(
                                 value = browse ?: query,
                                 onValueChange = { if (onField) { query = it; browse = null } },
-                                modifier = Modifier.fillMaxWidth().focusRequester(fieldFocus),
+                                // Only focusable while D-pad focus is on it: otherwise clearing focus (or
+                                // the window regaining it) hands Compose focus straight back to the field,
+                                // which reopens its input session and the keyboard.
+                                modifier = Modifier.fillMaxWidth().focusProperties { canFocus = onField }.focusRequester(fieldFocus),
                                 singleLine = true,
                                 textStyle = style,
                                 cursorBrush = SolidColor(Swiss.Focus),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, showKeyboardOnFocus = false),
-                                keyboardActions = KeyboardActions(onSearch = {
-                                    editing = false; hideIme(); wantFirst = true
-                                }),
+                                // Some TV keyboards send Done/Go or a bare Enter instead of Search.
+                                keyboardActions = KeyboardActions(onSearch = { submitted() }, onDone = { submitted() }, onGo = { submitted() }),
                             )
                             if (query.isEmpty() && browse == null) {
                                 T(if (listening) "Listening…" else notice ?: "Say or type…", style, color = Swiss.Muted, maxLines = 1)

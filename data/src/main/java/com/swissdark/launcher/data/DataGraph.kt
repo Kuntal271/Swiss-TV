@@ -174,6 +174,28 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     }
 
     /** Only after the first frame: refreshers, receivers, image cache warm-up. */
+    /**
+     * Continue watching cards that show only the app's banner (or Crunchyroll's own picture):
+     * look the show up once, in the background, and give the card its art.
+     */
+    private fun watchCardArt() {
+        val tried = HashSet<String>()
+        scope.launch {
+            home.snapshot.collect { snap ->
+                for (item in snap.upNext) {
+                    if (!item.key.startsWith("w:") || item.key.endsWith("|" + WatchedStore.APP_GROUP)) continue
+                    val crunchy = item.service.packageName == WatchedStore.CRUNCHYROLL
+                    if (!item.artKey.startsWith("banner:") && !(crunchy && item.artKey.startsWith("file:"))) continue
+                    if (!tried.add(item.key + "|" + item.name)) continue
+                    launch {
+                        val url = backdropArt.showArtUrl(item) ?: return@launch
+                        watched.setShowArt(item.key.removePrefix("w:"), url)
+                    }
+                }
+            }
+        }
+    }
+
     fun startBackground() {
         network.start()
         watchPower()
@@ -195,6 +217,7 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
             }
         }
         watched.start()      // media sessions → Up next; a no-op until setup.sh enables the listener
+        watchCardArt()
         wallpapers.start()
         refresh(RefreshReason.COLD_START)
         search.rebuildIndex()
