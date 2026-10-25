@@ -412,12 +412,13 @@ private fun Thumb(
 private val serviceKeys = listOf("netflix", "prime", "jiohotstar", "sonyliv", "zee5", "appletv", "crunchyroll", "youtube")
 
 private fun servicesSection(s: LauncherSettings, a: SettingsActions) = SectionContent(
-    count = serviceKeys.size + 1,
+    count = serviceKeys.size + 2,
     click = { i ->
         if (i < serviceKeys.size) {
             val k = serviceKeys[i]
             a.update { it.copy(myServices = if (k in it.myServices) it.myServices - k else it.myServices + k) }
-        } else a.update { it.copy(removedUpNext = emptyList()) }
+        } else if (i == serviceKeys.size) a.update { it.copy(clearContinueOnOff = !it.clearContinueOnOff) }
+        else a.update { it.copy(removedUpNext = emptyList()) }
     },
 ) { f, base ->
     Column {
@@ -426,7 +427,8 @@ private fun servicesSection(s: LauncherSettings, a: SettingsActions) = SectionCo
             val p = Providers.byKey(key) ?: continue
             ValueRow(f, base + k, p.name + if (key == "youtube") " Premium" else "", if (key in s.myServices) "In my plan" else "—")
         }
-        ValueRow(f, base + serviceKeys.size, "Bring back removed Up next items", "${s.removedUpNext.size} removed", last = true)
+        ValueRow(f, base + serviceKeys.size, "Clear when TV turns off", onOff(s.clearContinueOnOff))
+        ValueRow(f, base + serviceKeys.size + 1, "Bring back removed Up next items", "${s.removedUpNext.size} removed", last = true)
     }
 }
 

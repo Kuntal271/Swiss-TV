@@ -190,6 +190,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                 },
                 active = top == Route.Home,
                 entrance = homeEntrance,
+                backdropArt = remember { { item -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { g.backdropArt.bitmapFor(item) } } },
             )
         }
 

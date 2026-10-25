@@ -137,6 +137,7 @@ interface WatchedDao {
     @Query("SELECT * FROM watched WHERE `key` = :key") suspend fun get(key: String): WatchedRow?
     @Query("SELECT * FROM watched ORDER BY updatedAt DESC LIMIT :n") suspend fun recent(n: Int): List<WatchedRow>
     @Query("DELETE FROM watched WHERE `key` = :key") suspend fun delete(key: String)
+    @Query("DELETE FROM watched") suspend fun clear(): Int
     @Query("DELETE FROM watched WHERE `key` NOT IN (SELECT `key` FROM watched ORDER BY updatedAt DESC LIMIT :keep)") suspend fun trim(keep: Int)
 }
 
@@ -203,11 +204,26 @@ class WatchedStore(
         scope.launch(writer) { db.dao().delete(key) }
     }
 
+    /**
+     * False from TV standby (screen off) until the screen is on again: the "paused/stopped"
+     * samples apps send as the TV goes off must not bring cleared rows straight back.
+     */
+    @Volatile var recording = true
+
+    /** Continue watching cleared (TV off / boot): every row, and the cached thumbnails. */
+    suspend fun clearAll(): Int = withContext(writer) {
+        val n = db.dao().clear()
+        known.clear()
+        liveKeyByPkg.clear()
+        n + ContinueCleaner.deleteFiles(thumbs)
+    }
+
     // ---- recording ----
 
     private val gate = PlaybackGate()
 
     private fun onSample(s: MediaSample) {
+        if (!recording) return
         if (untitled(s)) return onUntitled(s)
         val parsed = parse(s) ?: return
         val key = s.packageName + "|" + parsed.group

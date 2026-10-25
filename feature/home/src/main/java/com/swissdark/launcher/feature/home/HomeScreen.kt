@@ -77,7 +77,7 @@ private val links = listOf("Search", "All apps", "Inputs", "Settings")
  * A press moves one integer; the hero text reads the focused card from the snapshot.
  */
 @Composable
-fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean, entrance: Int = 0) {
+fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean, entrance: Int = 0, backdropArt: (suspend (ContinueItem) -> android.graphics.Bitmap?)? = null) {
     val up = snapshot.upNext
     val apps = snapshot.apps
     val nUp = up.size
@@ -146,7 +146,8 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     val g4 = remember { group(enter, 4) }
 
     Box(Modifier.fillMaxSize()) {
-        Backdrop(wallpaper)
+        // Focus backdrop: the focused Continue watching card's art over the wallpaper (indices < nUp).
+        com.swissdark.launcher.core.design.FocusBackdrop(wallpaper, com.swissdark.launcher.core.design.rememberFocusedArt(focus.engine.focused, up, backdropArt))
         FocusRoot(focus, Swiss.Focus) {
             Frame {
                 Box(Modifier.enter(g0, fromAlpha = FROM_ALPHA)) {

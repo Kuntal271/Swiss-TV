@@ -55,6 +55,9 @@ class OmdbClient(private val http: OkHttpClient, private val key: () -> String) 
 
     suspend fun byId(imdbId: String): JsonObject? = get(url("i" to imdbId, "plot" to "full"))
 
+    /** Raw `s=` search restricted to episodes (used by BackdropArt to find the show of an episode name). */
+    suspend fun searchEpisodes(q: String): JsonObject? = get(url("s" to q, "type" to "episode"))
+
     suspend fun byTitle(title: String, type: MediaType?): JsonObject? = get(
         url(*listOfNotNull("t" to title, "plot" to "full", type?.let { "type" to if (it == MediaType.MOVIE) "movie" else "series" }).toTypedArray()),
     )

@@ -194,6 +194,8 @@ data class LauncherSettings(
     val showLatencyOverlay: Boolean = false,
     // Appended last: protobuf field numbers follow declaration order, so old settings.pb still decodes.
     val omdbKey: String = "",                          // OMDb key: titles without a working TMDB key
+    val clearContinueOnOff: Boolean = true,            // empty Continue watching when the TV goes to standby / boots
+    val continueClearedAt: Long = 0L,                  // last clear: Watch Next rows engaged before it stay hidden
 )
 
 /** TCL utilities that clutter the app list. Hidden, not disabled; unhide in Launcher settings › Apps. */

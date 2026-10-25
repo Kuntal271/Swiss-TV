@@ -82,6 +82,7 @@ interface LauncherDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putHistory(r: HistoryRow)
     @Query("SELECT * FROM history ORDER BY openedAt DESC LIMIT :n") suspend fun history(n: Int): List<HistoryRow>
     @Query("DELETE FROM history WHERE `key` = :key") suspend fun deleteHistory(key: String)
+    @Query("DELETE FROM history") suspend fun clearHistory(): Int
 
     @Insert suspend fun putSearch(r: SearchRow)
     @Query("DELETE FROM searches WHERE `query` = :q") suspend fun deleteSearch(q: String)

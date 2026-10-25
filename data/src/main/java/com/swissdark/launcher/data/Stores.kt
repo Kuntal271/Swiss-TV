@@ -97,9 +97,19 @@ class SnapshotStore(context: Context, private val scope: CoroutineScope) {
         pending?.cancel()
         pending = scope.launch {
             delay(2_000)
-            val tmp = File(file.parentFile, file.name + ".tmp")
-            tmp.writeBytes(ProtoBuf.encodeToByteArray(HomeSnapshot.serializer(), s))
-            tmp.renameTo(file)
+            write(s)
         }
+    }
+
+    /** Before standby: the process may be frozen before a debounced write would run. */
+    fun writeNow(s: HomeSnapshot) {
+        pending?.cancel()
+        write(s)
+    }
+
+    private fun write(s: HomeSnapshot) {
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        tmp.writeBytes(ProtoBuf.encodeToByteArray(HomeSnapshot.serializer(), s))
+        tmp.renameTo(file)
     }
 }

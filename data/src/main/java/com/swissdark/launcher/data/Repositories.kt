@@ -194,6 +194,12 @@ class HomeRepositoryImpl(
         }
     }
 
+    /** Continue watching was just cleared: rebuild now and write the L2 snapshot without the debounce. */
+    suspend fun rebuildNow() {
+        withContext(worker) { rebuild(RefreshReason.SETTINGS_CHANGED) }
+        store.writeNow(_snapshot.value)
+    }
+
     override fun removeFromUpNext(item: ContinueItem) {
         if (item.source != ContinueSource.WATCHED) settings.update { it.copy(removedUpNext = (it.removedUpNext + item.key).takeLast(100)) }
         if (item.source == ContinueSource.HISTORY) scope.launch { dao.deleteHistory(item.key) }
@@ -240,6 +246,7 @@ class HomeRepositoryImpl(
                 is WatchNextAdapter.Result.Rows -> {
                     watchNextStatus = "open (${wn.rows.size} rows)"
                     for (r in wn.rows) {
+                        if (ContinueCleaner.clearedWatchNext(r.lastEngagement, s.continueClearedAt)) continue
                         val item = fromWatchNext(r, byPkg) ?: continue
                         if (item.key !in removed && items.none { it.key == item.key }) items.add(item)
                         if (items.size == 3) break

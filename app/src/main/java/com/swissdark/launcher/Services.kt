@@ -38,6 +38,12 @@ class BootReceiver : BroadcastReceiver() {
             reenableMediaListener(context)
         }
         context.graph.status.checkHome()
+        context.graph.watchPower()
+        // The TV was off (or lost power): start with an empty Continue watching.
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            val pending = goAsync()
+            context.graph.clearContinue("boot") { pending.finish() }
+        }
     }
 
     companion object {
@@ -94,6 +100,18 @@ class ConfigReceiver : BroadcastReceiver() {
 }
 
 /**
+ * Test hook for "clear Continue watching when the TV turns off", without turning the TV off:
+ * `adb shell am broadcast -a com.swissdark.launcher.DEBUG_SCREEN_OFF -p com.swissdark.launcher [--ez force true]`.
+ * Same path as SCREEN_OFF; honours the setting unless force.
+ */
+class DebugScreenOffReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val pending = goAsync()
+        context.graph.clearContinue("debug", force = intent.getBooleanExtra("force", false)) { pending.finish() }
+    }
+}
+
+/**
  * Fallback only. If a TCL or Google update hands Home back to Google TV, this sees Google TV's
  * home window appear and brings this launcher to the front. Enabled by setup.sh only when
  * `cmd package set-home-activity` did not stick.
@@ -131,5 +149,6 @@ class HomeFallbackService : AccessibilityService() {
 class MediaListenerService : android.service.notification.NotificationListenerService() {
     override fun onListenerConnected() {
         graph.watched.start()
+        graph.watchPower()
     }
 }

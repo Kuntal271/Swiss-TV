@@ -64,6 +64,9 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     val home by lazy { HomeRepositoryImpl(context, scope, settings, apps, habits, usage, watchNext, db.dao(), snapshots, watched) }
     private val wallpapersLazy = lazy { WallpaperSchedulerImpl(context, scope, settings) }
     val wallpapers by wallpapersLazy
+    /** Home's focus backdrop: art for the focused Continue watching card (see BackdropArt). */
+    private val backdropLazy = lazy { BackdropArt(context, tmdb, http, art) { wallpapers.current.value.dim } }
+    val backdropArt by backdropLazy
     val search by lazy { SearchEngineImpl(scope, db.dao(), tmdb, apps, settings) }
     val titles by lazy { TitleRepositoryImpl(scope, db.dao(), tmdb, settings) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
     val launcher by lazy { AppLauncherImpl(scope, launchAdapter, habits, settings, apps) { refresh(it) }.also { it.watchedOpener = { u -> watched.open(u) } } }
@@ -109,7 +112,43 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             if (artLazy.isInitialized()) art.trim()
             if (wallpapersLazy.isInitialized()) wallpapers.trim()
+            if (backdropLazy.isInitialized()) backdropArt.trim()
         }
+    }
+
+    /** TV off / boot: empty Continue watching (LauncherSettings.clearContinueOnOff). */
+    val continueCleaner by lazy {
+        ContinueCleaner({ settings.settings.value.clearContinueOnOff }, object : ContinueCleaner.Ops {
+            override suspend fun deleteWatched() = watched.clearAll()
+            override suspend fun deleteHistory() = db.dao().clearHistory()
+            override fun markCleared(at: Long) = settings.update { it.copy(continueClearedAt = at) }
+            override suspend fun rebuild() = home.rebuildNow()
+        })
+    }
+
+    fun clearContinue(reason: String, force: Boolean = false, done: () -> Unit = {}) {
+        scope.launch {
+            try { continueCleaner.clear(reason, force) } finally { done() }
+        }
+    }
+
+    private val powerWatched = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Idempotent. Called from every long-lived entry point (first Home frame, the media listener
+     * binding, boot), so it is registered even when MainActivity never started after boot.
+     */
+    fun watchPower() {
+        if (!powerWatched.compareAndSet(false, true)) return
+        PowerEvents(
+            onOff = { reason, done ->
+                if (settings.settings.value.clearContinueOnOff) {
+                    watched.recording = false
+                    clearContinue(reason, done = done)
+                } else done()
+            },
+            onOn = { watched.recording = true },
+        ).register(context.applicationContext)
     }
 
     fun refresh(reason: RefreshReason) {
@@ -119,6 +158,7 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     /** Only after the first frame: refreshers, receivers, image cache warm-up. */
     fun startBackground() {
         network.start()
+        watchPower()
         packages.watch {
             if (artLazy.isInitialized()) art.forgetMisses()
             refresh(RefreshReason.PACKAGES_CHANGED)
