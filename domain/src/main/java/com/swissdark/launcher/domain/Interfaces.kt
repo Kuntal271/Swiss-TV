@@ -18,6 +18,8 @@ interface HomeRepository {
     val snapshot: StateFlow<HomeSnapshot>        // never empty after first frame
     suspend fun refresh(reason: RefreshReason)
     fun removeFromUpNext(item: ContinueItem)
+    /** Puts back the card [removeFromUpNext] took away last (a few seconds' undo). False: nothing to undo. */
+    fun undoRemove(): Boolean = false
 }
 
 interface AppsRepository {
@@ -67,6 +69,7 @@ interface SearchEngine {
 interface TitleRepository {
     suspend fun details(ref: TitleRef): TitleDetails?
     fun saveForLater(details: TitleDetails)
+    /** Remembered for naming a later playback (and Search's recent list); never a Continue watching card by itself. */
     fun recordOpened(ref: TitleRef, service: AppId, artUrl: String?)
 }
 
@@ -109,7 +112,8 @@ object Providers {
     val all = listOf(
         Provider("netflix", "Netflix", setOf(8, 175, 1796), listOf("com.netflix.ninja"), 0xFFB20710),
         Provider("prime", "Prime Video", setOf(9, 119, 2100), listOf("com.amazon.amazonvideo.livingroom"), 0xFF0F79AF),
-        Provider("jiohotstar", "JioHotstar", setOf(122, 220, 2336), listOf("com.jio.media.stb.ondemand", "in.startv.hotstar"), 0xFF0F1E5A),
+        // JioHotstar first: the old JioCinema app (com.jio.media.stb.ondemand) may still be installed.
+        Provider("jiohotstar", "JioHotstar", setOf(122, 220, 2336), listOf("in.startv.hotstar", "com.jio.media.stb.ondemand"), 0xFF0F1E5A),
         Provider("sonyliv", "SonyLIV", setOf(237), listOf("com.sonyliv"), 0xFF1D1D1D),
         Provider("zee5", "ZEE5", setOf(232), listOf("com.graymatrix.did"), 0xFF6A1B9A),
         Provider("appletv", "Apple TV", setOf(2, 350), listOf("com.apple.atve.androidtv.appletv"), 0xFF1C1C1E),
@@ -117,6 +121,18 @@ object Providers {
         Provider("crunchyroll", "Crunchyroll", setOf(283), listOf("com.crunchyroll.crunchyroid"), 0xFFF47521),
         Provider("googletv", "Google TV", setOf(3), listOf("com.google.android.videos"), 0xFF1A73E8),
     )
+
+    /**
+     * Launchable packages on this TV, set by the app list scan. Empty until the first scan: then
+     * [Provider.installedPackage] is the list's first (preferred) package.
+     */
+    @Volatile var installed: Set<String> = emptySet()
+
+    /** The provider's first INSTALLED package (else its preferred one). Use this everywhere a package is chosen. */
+    val Provider.installedPackage: String get() = installed.let { inst -> packages.firstOrNull { it in inst } ?: packages.first() }
+
+    /** [pkg] mapped to the installed package of the same provider (old JioCinema → JioHotstar). */
+    fun resolve(pkg: String): String = byPackage(pkg)?.installedPackage ?: pkg
 
     fun byTmdb(id: Int) = all.firstOrNull { id in it.tmdbIds }
     fun byPackage(pkg: String) = all.firstOrNull { pkg in it.packages }

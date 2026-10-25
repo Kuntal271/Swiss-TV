@@ -166,6 +166,18 @@ class FocusScreenState internal constructor(
     /** Any other key (Back, media, Search, Input). Return true if handled. */
     var onOtherKey: (KeyEvent) -> Boolean = { false }
     var onFocusChanged: (Int) -> Unit = {}
+    /**
+     * Runs after the graph picked [to] for a press from [from] in [dir]; returns where focus really
+     * goes (e.g. focus memory, or a row the screen wants kept). Returning [from] = no move.
+     */
+    var redirect: (from: Int, to: Int, dir: DpadKey) -> Int = { _, to, _ -> to }
+    /**
+     * Scroll only to row starts: the viewport's top edge always sits EDGE above some scrolling
+     * item's top, so no sliver of a row (art cut, label bright) is ever left at the top.
+     */
+    var snapRows = false
+    /** Scroll back to 0 whenever the focused item is visible there (keeps headings above it whole). */
+    var preferTop = false
     var ringOffset = 6f
     var ringStroke = 4f
     var enabled = true
@@ -270,13 +282,32 @@ class FocusScreenState internal constructor(
         val maxScroll = (maxOf(contentBottom.coerceAtMost(Float.MAX_VALUE / 2), itemBottom) + EDGE - viewportBottom).coerceAtLeast(0f)
         val bottom = itemBottom + PEEK
         val s = scrollTarget
-        val y = when {
-            bottom - s > viewportBottom -> (bottom - viewportBottom).coerceAtMost(maxScroll)
+        // Everything fits, or (preferTop) this item shows with no scroll at all: stay at the top,
+        // so labels and titles above the first rows are never sliced.
+        if (contentBottom <= viewportBottom || (preferTop && itemBottom + EDGE <= viewportBottom)) {
+            if (s != 0f) scrollTo(0f, animate, held)
+            return
+        }
+        var y = when {
+            bottom - s > viewportBottom -> if (snapRows) bottom - viewportBottom else (bottom - viewportBottom).coerceAtMost(maxScroll)
             top - s < viewportTop -> (top - viewportTop).coerceAtLeast(0f)
-            s > maxScroll -> maxScroll
+            s > maxScroll && !snapRows -> maxScroll
             else -> return
         }
+        if (snapRows && y > 0f) y = rowStartAtOrAfter(y, i)
         scrollTo(y, animate, held)
+    }
+
+    /** The smallest row-start scroll ≥ [y] that still shows item [i]'s top (no allocation). */
+    private fun rowStartAtOrAfter(y: Float, i: Int): Float {
+        val limit = rects[i * 4 + 1] - EDGE - viewportTop
+        var best = Float.MAX_VALUE
+        for (k in 0 until count) {
+            if (!scrolls[k] || !seen[k]) continue
+            val c = rects[k * 4 + 1] - EDGE - viewportTop
+            if (c >= y - 0.5f && c <= limit + 0.5f && c < best) best = c
+        }
+        return if (best == Float.MAX_VALUE) y else best.coerceAtLeast(0f)
     }
 
     /** The ring's target for item [i]: its rect, grown by the focus scale when the item scales. */
@@ -369,7 +400,12 @@ class FocusScreenState internal constructor(
         ensureGraph()
         val cur = engine.focused.intValue
         if (engine.onKey(dir, repeat)) {
-            val next = engine.focused.intValue
+            var next = engine.focused.intValue
+            val r = redirect(cur, next, dir)
+            if (r != next) {
+                if (r < 0 || r >= count || r == cur) { engine.set(cur); return }
+                engine.set(r); next = r
+            }
             ensureVisible(next, animate = true, held = repeat)
             // Held keys repeat ~every 50 ms: skip the ring animation so focus never lags.
             placeRing(animate = !repeat)

@@ -88,7 +88,16 @@ class OmdbClient(private val http: OkHttpClient, private val key: () -> String) 
             return@coroutineScope hits
         }
         val p = fresh.await()
-        hits.map { h -> TitleIds.imdb(h.ref.tmdbId)?.let(p::get)?.let { h.copy(posterUrl = OmdbParse.encode(it)) } ?: h }
+        // Titles outside the query's top IMDb suggestions: ask IMDb by id, a few in parallel.
+        // OMDb's own poster URL is often dead (grey tile), so it is only the last resort.
+        val missing = hits.mapNotNull { TitleIds.imdb(it.ref.tmdbId) }.filter { it !in p }.take(PER_ID_POSTERS)
+        val byId = missing.map { id -> async { imdbPosters(id)[id]?.let { id to it } } }.mapNotNull { it.await() }.toMap()
+        val all = p + byId
+        hits.map { h -> TitleIds.imdb(h.ref.tmdbId)?.let(all::get)?.let { h.copy(posterUrl = OmdbParse.encode(it)) } ?: h }
+    }
+
+    private companion object {
+        const val PER_ID_POSTERS = 10
     }
 
     /** [posters] = false skips the IMDb poster refresh (callers that only read ids). */

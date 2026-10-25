@@ -22,6 +22,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import com.swissdark.launcher.core.design.focusFill
+import com.swissdark.launcher.core.design.rememberFocusInk
 import com.swissdark.launcher.core.design.Art
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Footer
@@ -88,7 +95,7 @@ fun UpNextTitleScreen(
     Box(Modifier.fillMaxSize().background(Swiss.Ground)) {
         FocusRoot(focus, Swiss.Focus) {
             Frame {
-                Header(deviceName.uppercase(), now.format(Fmt.clock), "Continue watching · %02d of %02d".format(position + 1, total), item.serviceName)
+                Header(deviceName.uppercase(), now.format(Fmt.clock), "Continue · ${position + 1} of $total", item.serviceName)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(5)).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
                         Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -112,11 +119,21 @@ fun UpNextTitleScreen(
                                 }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                                PrimaryButton(focus, 0, (if (item.progress != null) "Resume in " else "Open in ") + item.serviceName)
-                                OutlineButton(focus, 1, "Remove")
+                                TitleButton(focus, 0, (if (item.progress != null) "Resume in " else "Open in ") + item.serviceName, primary = true)
+                                TitleButton(focus, 1, "Remove")
                             }
                         }
-                        if (eps.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        // Next episodes in order, the very next one first. Without any pictures the
+                        // grey boxes say nothing: a plain list instead.
+                        val pictures = eps.any { it.stillUrl != null } || details?.backdropUrl != null
+                        if (eps.isNotEmpty() && !pictures) Column {
+                            Label("Next episodes", Modifier.padding(bottom = 14.dp))
+                            for ((k, e) in eps.withIndex()) RuleRow(focus, 2 + k, bottomRule = k == eps.lastIndex, vertical = 14.dp) { c ->
+                                TDraw("E${e.number} · ${e.name}", SwissType.Row30, c.ink, Modifier.weight(1f), maxLines = 1)
+                                TDraw((if (k == 0) "Next · " else "") + (e.runtimeMin?.let { "$it min" } ?: ""), SwissType.Meta, c.muted, maxLines = 1)
+                            }
+                        }
+                        if (eps.isNotEmpty() && pictures) Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Label("Next episodes")
                             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                                 for ((k, e) in eps.withIndex()) {
@@ -132,7 +149,13 @@ fun UpNextTitleScreen(
                         }
                     }
                     val backdrop = details?.backdropUrl
-                    if (backdrop == null && item.artKey.startsWith("banner:")) {
+                    val poster = details?.posterUrl
+                    if (backdrop == null && poster != null) {
+                        // Only a poster: show all of it (a 2:3 poster cropped to this panel reads "LUP").
+                        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            Art(poster, 507, 760, Modifier.fillMaxHeight().aspectRatio(2f / 3f))
+                        }
+                    } else if (backdrop == null && item.artKey.startsWith("banner:")) {
                         // A 320 × 180 app banner blown up to 1060 × 760 looks broken: show it at banner
                         // proportions on a panel instead.
                         Box(
@@ -203,7 +226,7 @@ fun TitleDetailsScreen(
         }
         FocusRoot(focus, Swiss.Focus) {
             Frame {
-                Header(deviceName.uppercase(), now.format(Fmt.clock), from, "Title")
+                Header(deviceName.uppercase(), now.format(Fmt.clock), shortFrom(from), "Title")
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(6)).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
                         Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -235,9 +258,9 @@ fun TitleDetailsScreen(
                             T(syn, SwissType.Body26, Modifier.widthIn(max = 820.dp), maxLines = if (details?.backdropUrl == null && details?.posterUrl != null) 4 else 5)
                             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                                 for ((k, b) in buttons.withIndex()) when (b) {
-                                    "watch" -> PrimaryButton(focus, k, (if (best?.kind == Kind.RENT || best?.kind == Kind.BUY) "Open " else "Watch on ") + (best?.providerName ?: ""))
-                                    "trailer" -> OutlineButton(focus, k, "Trailer")
-                                    "save" -> OutlineButton(focus, k, if (saved) "Saved" else "Save for later")
+                                    "watch" -> TitleButton(focus, k, (if (best?.kind == Kind.RENT || best?.kind == Kind.BUY) "Open " else "Watch on ") + (best?.providerName ?: ""), primary = true)
+                                    "trailer" -> TitleButton(focus, k, "Trailer")
+                                    "save" -> TitleButton(focus, k, if (saved) "Saved" else "Save for later")
                                 }
                             }
                         }
@@ -246,7 +269,9 @@ fun TitleDetailsScreen(
                             Label("Cast & crew")
                             Row(Modifier.widthIn(max = 820.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                                 for (p in cast) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Initial(p.name, Modifier.fillMaxWidth().height(96.dp), SwissType.Row30)
+                                    val photo = p.imageUrl
+                                    if (photo != null) Art(photo, 190, 96, Modifier.fillMaxWidth().height(96.dp))
+                                    else Initial(p.name, Modifier.fillMaxWidth().height(96.dp), SwissType.Row30)
                                     T(p.name, SwissType.Tile, maxLines = 1)
                                     T(p.role, SwissType.Meta, maxLines = 1)
                                 }
@@ -278,7 +303,8 @@ fun TitleDetailsScreen(
                         val eps = details?.nextEpisodes.orEmpty()
                         if (eps.isNotEmpty() && rows.size <= 3) {
                             Label("Season ${eps.first().season} · ${eps.size} episodes", Modifier.padding(top = 28.dp), style = SwissType.Label)
-                            for (e in eps.takeLast(4).asReversed()) {
+                            // Oldest to newest, like the season itself.
+                            for (e in eps.takeLast(4)) {
                                 T("E${e.number} · ${e.name}" + (e.runtimeMin?.let { " · ${durationText(it)}" } ?: ""), SwissType.Meta, maxLines = 1)
                             }
                         }
@@ -311,7 +337,10 @@ private fun WatchRow(focus: com.swissdark.launcher.core.focus.FocusScreenState, 
         Kind.BUY -> Triple("Buy ${a.priceInr?.let { "₹$it" } ?: "· price in app"} · keep forever", "Buy", false)
     }
     RuleRow(focus, index, bottomRule = last, vertical = 16.dp) { c ->
-        Box(Modifier.size(88.dp, 50.dp).background(Color(a.brandColor)).border(1.dp, Color(0xFF333338)))
+        // The service's own logo (its TV banner); its brand colour only when it is not installed.
+        val pkg = a.packageName
+        if (pkg != null && pkg.installed()) Art("banner:$pkg", 176, 100, Modifier.size(88.dp, 50.dp))
+        else Box(Modifier.size(88.dp, 50.dp).background(Color(a.brandColor)).border(1.dp, Color(0xFF333338)))
         Box(Modifier.width(24.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             TDraw(a.providerName, SwissType.Row32, c.ink, maxLines = 1)
@@ -321,3 +350,36 @@ private fun WatchRow(focus: com.swissdark.launcher.core.focus.FocusScreenState, 
     }
 }
 
+
+/** "Series · from search “Lupin”" → "Search “Lupin”": the header slot is a quarter of the width. */
+internal fun shortFrom(from: String): String {
+    Regex("""(?i)from search (“.*”)""").find(from)?.let { return "Search " + it.groupValues[1] }
+    if (" · from " in from) return from.substringAfter(" · from ").replaceFirstChar { it.uppercase() }
+    return from
+}
+
+/** Installed on this TV (its banner can be drawn); yes until the first app scan. */
+private fun String.installed(): Boolean = com.swissdark.launcher.domain.Providers.installed.let { it.isEmpty() || this in it }
+
+/**
+ * The title pages' buttons: one height for all (2 px inset outline on every one), primary or
+ * not. Unfocused, the primary is an ink outline with ink text, not a light block that competes
+ * with the yellow focus; focused, every button is the same yellow fill.
+ */
+@Composable
+private fun TitleButton(focus: com.swissdark.launcher.core.focus.FocusScreenState, index: Int, text: String, primary: Boolean = false) {
+    val ink = rememberFocusInk(focus, index)
+    val border = if (primary) Swiss.Ink else Swiss.Muted
+    TDraw(
+        text, SwissType.Button, ink.ink,
+        Modifier.focusFill(focus, index, ink)
+            .drawBehind {
+                if (ink.fraction < 1f) {
+                    val w = (if (primary) 3.dp else 2.dp).toPx()
+                    drawRect(border, Offset(w / 2f, w / 2f), Size(size.width - w, size.height - w), style = Stroke(w))
+                }
+            }
+            .padding(horizontal = 30.dp, vertical = 20.dp),
+        maxLines = 1,
+    )
+}

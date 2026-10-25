@@ -107,7 +107,7 @@ data class Availability(
 
 @Immutable
 @Serializable
-data class Person(val id: Int, val name: String, val role: String, val department: String, val knownFor: Int = 0)
+data class Person(val id: Int, val name: String, val role: String, val department: String, val knownFor: Int = 0, val imageUrl: String? = null)
 
 @Immutable
 @Serializable

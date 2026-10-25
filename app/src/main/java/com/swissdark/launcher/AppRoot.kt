@@ -41,6 +41,9 @@ import com.swissdark.launcher.core.perf.LatencyOverlay
 import com.swissdark.launcher.data.DataGraph
 import com.swissdark.launcher.domain.Availability
 import com.swissdark.launcher.domain.ContinueItem
+import com.swissdark.launcher.domain.ContinueSource
+import com.swissdark.launcher.domain.MediaType
+import kotlinx.coroutines.launch
 import com.swissdark.launcher.domain.LaunchResult
 import com.swissdark.launcher.domain.Providers
 import com.swissdark.launcher.domain.RefreshReason
@@ -93,6 +96,10 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
     val isHome by g.status.isHomeApp.collectAsState()
     val top = routes.last()
     var message by remember { mutableStateOf<String?>(null) }
+    // How long the message stays (ms); the undo prompt for a removed card stays 5 s.
+    var messageMs by remember { mutableStateOf(4_000L) }
+    // Until when OK on Home brings back the card just removed.
+    val undoUntil = remember { longArrayOf(0L) }
     val device = g.status.deviceName
     val reduce = LocalReduceMotion.current
 
@@ -138,6 +145,21 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
         nav.depth = routes.size
         // Home shows through only when a screen opens straight over it; page to page cross-fades on the ground.
         nav.covered.value = cut || old != Route.Home
+        // Fade-through: Home fades out before a page comes in, and back in after a page has gone.
+        // Panels keep Home under their scrim.
+        val oldPage = old != Route.Home && !isPanel(old)
+        nav.homeTarget = if (top == Route.Home || isPanel(top) && old == Route.Home) 1f else 0f
+        nav.homeDelay = if (top == Route.Home && oldPage && !cut) FADE_OUT_MS else 0
+        nav.homeCut = cut
+    }
+    LaunchedEffect(top) {
+        val target = nav.homeTarget
+        if (nav.homeA.value == target) return@LaunchedEffect
+        if (nav.homeCut) nav.homeA.snapTo(target)
+        else {
+            if (nav.homeDelay > 0) delay(nav.homeDelay.toLong())
+            nav.homeA.animateTo(target, if (target == 0f) Motion.exit(FADE_OUT_MS) else Motion.enter(Motion.SHORT))
+        }
     }
     val leaving = nav.leaving
     if (leaving != null) {
@@ -161,34 +183,57 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
     CompositionLocalProvider(LocalIconPack provides settings.iconPack) {
     Box(Modifier.fillMaxSize().background(Swiss.Ground)) {
         // Home stays drawn until the screen on top has fully covered it, then costs nothing.
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (top == Route.Home || !nav.covered.value) 1f else 0f }) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (top == Route.Home || !nav.covered.value) nav.homeA.value else 0f }) {
             HomeScreen(
                 snapshot, wallpaper,
                 HomeStatus(device, network, isHome, settings.lastInput ?: "Home", if (top == Route.Home) "Hold OK to remove a card or pin an app" else ""),
                 remember {
+                    // OK during the undo window after a removal brings the card back instead.
+                    fun undone(): Boolean {
+                        if (SystemClock.uptimeMillis() >= undoUntil[0]) return false
+                        undoUntil[0] = 0L
+                        if (!g.home.undoRemove()) return false
+                        messageMs = 2_000L
+                        message = "Card restored"
+                        return true
+                    }
+                    fun details(item: ContinueItem) {
+                        val list = g.home.snapshot.value.upNext
+                        activity.push(Route.UpNext(item, list.indexOf(item).coerceAtLeast(0), list.size))
+                    }
                     HomeActions(
                         openItem = { item ->
-                            if (item.isAppPlayback()) {
-                                // Netflix, Prime…: no title to show a page for. Straight back in:
-                                // the live session if there is one, else the app.
-                                val uri = item.intentUri
-                                if (uri == null || g.launcher.watchedOpener?.invoke(uri) != true) report(g.launcher.launch(item.service), item.serviceName)
-                            } else if (item.isAppOnly()) {
+                            val uri = item.intentUri
+                            if (!undone()) when {
+                                // OK = Resume, as the hint says: straight back into what was playing
+                                // (the live session, the video at its position, else the app).
+                                // The title page stays one hold-OK away ("Details").
+                                item.source == ContinueSource.WATCHED ->
+                                    if (uri == null || g.launcher.watchedOpener?.invoke(uri) != true) {
+                                        report(g.launcher.openTitle(item.title ?: TitleRef(0, MediaType.TV, item.name), item.service), item.serviceName)
+                                    }
+                                item.source == ContinueSource.WATCH_NEXT && uri != null ->
+                                    report(g.launcher.openTitle(item.title ?: TitleRef(0, MediaType.TV, item.name), item.service, uri), item.serviceName)
                                 // Nothing to show about a bare app: open it, like an app tile does.
-                                report(g.launcher.launch(item.service), item.serviceName)
-                            } else {
-                                val list = g.home.snapshot.value.upNext
-                                activity.push(Route.UpNext(item, list.indexOf(item).coerceAtLeast(0), list.size))
+                                item.isAppOnly() -> report(g.launcher.launch(item.service), item.serviceName)
+                                // Saved for later: nothing to resume yet, show what it is.
+                                else -> details(item)
                             }
                         },
-                        removeItem = { g.home.removeFromUpNext(it) },
-                        launchApp = { report(g.launcher.launch(it.id), it.label) },
+                        removeItem = {
+                            g.home.removeFromUpNext(it)
+                            undoUntil[0] = SystemClock.uptimeMillis() + 5_000L
+                            messageMs = 5_000L
+                            message = "Removed “${it.name}” · OK to undo"
+                        },
+                        details = { details(it) },
+                        launchApp = { if (!undone()) report(g.launcher.launch(it.id), it.label) },
                         pinApp = { g.apps.setPinned(it.id, !it.pinned); g.refresh(RefreshReason.SETTINGS_CHANGED) },
-                        allApps = { activity.push(Route.AllApps) },
-                        search = { activity.push(Route.Search) },
-                        inputs = { activity.push(Route.Inputs) },
-                        quickSettings = { activity.push(Route.Quick) },
-                        launcherSettings = { activity.push(Route.Settings()) },
+                        allApps = { if (!undone()) activity.push(Route.AllApps) },
+                        search = { if (!undone()) activity.push(Route.Search) },
+                        inputs = { if (!undone()) activity.push(Route.Inputs) },
+                        quickSettings = { if (!undone()) activity.push(Route.Quick) },
+                        launcherSettings = { if (!undone()) activity.push(Route.Settings()) },
                     )
                 },
                 active = top == Route.Home,
@@ -255,6 +300,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                     )
                 }
                 is Route.Title -> {
+                    val titleScope = androidx.compose.runtime.rememberCoroutineScope()
                     var details by remember(r.ref) { mutableStateOf<TitleDetails?>(null) }
                     var failed by remember(r.ref) { mutableStateOf(false) }
                     var saved by remember(r.ref) { mutableStateOf(false) }
@@ -268,14 +314,22 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                             watch = { a: Availability ->
                                 val pkg = a.packageName
                                 val app = pkg?.let { p -> g.apps.apps.value.firstOrNull { it.id.packageName == p } }
+                                val ref = details?.ref ?: r.ref
+                                fun go() {
+                                    val res = g.launcher.openTitle(ref, app!!.id)
+                                    // Remembered only to name what plays next in that app; not a card by itself.
+                                    if (res !is LaunchResult.Failed) g.titles.recordOpened(ref, app.id, details?.backdropUrl ?: r.art)
+                                    if (res !is LaunchResult.OpenedAppHome) report(res, a.providerName)
+                                }
                                 if (app == null) {
                                     message = "${a.providerName} isn’t installed — opening Play Store"
                                     pkg?.let { activity.openPlayStore(it) }
-                                } else {
-                                    val res = g.launcher.openTitle(details?.ref ?: r.ref, app.id)
-                                    if (res !is LaunchResult.Failed) g.titles.recordOpened(details?.ref ?: r.ref, app.id, details?.backdropUrl ?: r.art)
-                                    report(res, a.providerName)
-                                }
+                                } else if (!g.launcher.opensTitles(app.id.packageName)) {
+                                    // Netflix, Prime Video, JioHotstar take no search: say so before handing off.
+                                    messageMs = 2_500L
+                                    message = "${a.providerName} opens on its home — search “${ref.name}” there"
+                                    titleScope.launch { delay(2_500); go() }
+                                } else go()
                             },
                             trailer = { report(g.launcher.openTrailer(it), "YouTube") },
                             save = { details?.let { g.titles.saveForLater(it); saved = true } },
@@ -347,6 +401,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                         },
                         active = active,
                         initialSection = r.section,
+                        backTo = if (routes.getOrNull(routes.size - 2) == Route.Quick) "Quick settings" else "Home",
                     )
                 }
             }
@@ -358,7 +413,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
             for (r in listOfNotNull(nav.leaving?.takeIf { it != top }, top.takeIf { it != Route.Home })) key(r) {
                 val isTop = r == top
                 RouteLayer(
-                    panel = r == Route.Quick || r == Route.Inputs,
+                    panel = isPanel(r),
                     entering = isTop,
                     back = nav.back,
                     cut = nav.cut && isTop,
@@ -381,10 +436,11 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
             LaunchedEffect(msg) {
                 shown = msg
                 if (reduce) msgP.snapTo(1f) else msgP.animateTo(1f, Motion.enter(Motion.MEDIUM))
-                delay(4_000)
+                delay(messageMs)
                 if (reduce) msgP.snapTo(0f) else msgP.animateTo(0f, Motion.exit(Motion.SHORT))
                 message = null
                 shown = null
+                messageMs = 4_000L
             }
         }
         shown?.let { text ->
@@ -408,6 +464,11 @@ private class NavTransition {
     var cut = true
     /** The top screen has finished entering and hides Home completely. */
     val covered = mutableStateOf(true)
+    /** Home's own alpha for fade-through (pages) — panels leave it at 1. */
+    val homeA = Animatable(1f)
+    var homeTarget = 1f
+    var homeDelay = 0
+    var homeCut = true
     val tick = mutableIntStateOf(0)
 }
 
@@ -429,10 +490,11 @@ private fun RouteLayer(
     val dir = remember { floatArrayOf(0f) }
     LaunchedEffect(entering) {
         if (entering) {
-            if (p.value < 1f) p.animateTo(1f, if (panel) Motion.enter(Motion.LONG) else Motion.enter(Motion.MEDIUM))
+            // Pages fade through: the screen going away (or Home) fades out first, then this one comes in.
+            if (p.value < 1f) p.animateTo(1f, if (panel) Motion.enter(Motion.LONG) else Motion.enter(Motion.MEDIUM, delay = FADE_OUT_MS))
             onCovered()
         } else {
-            p.animateTo(0f, Motion.exit(if (panel) Motion.SHORT else Motion.QUICK))
+            p.animateTo(0f, Motion.exit(if (panel) Motion.SHORT else FADE_OUT_MS))
         }
     }
     // Going forward a page comes in from the right and the old one leaves to the left; Back reverses.
@@ -449,3 +511,8 @@ private fun RouteLayer(
 
 @Composable
 private fun Scope(content: @Composable () -> Unit) = content()
+
+/** Fade-through: how long the outgoing screen takes to fade out before the next one fades in. */
+private const val FADE_OUT_MS = 90
+
+private fun isPanel(r: Route) = r == Route.Quick || r == Route.Inputs

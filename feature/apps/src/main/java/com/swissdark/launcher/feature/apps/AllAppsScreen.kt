@@ -72,7 +72,11 @@ fun AllAppsScreen(
 ) {
     var menuFor by remember { mutableStateOf<AppEntry?>(null) }
     var moving by remember { mutableStateOf<AppEntry?>(null) }
+    // Where the app being moved started, so Back can put it back.
+    val moveFrom = remember { intArrayOf(-1) }
     val grid = rememberFocusScreen(apps.size, active = active && menuFor == null && moving == null)
+    // Scroll by whole rows: no sliver of a row (cut art, bright label) at the top edge.
+    grid.snapRows = true
     val now by rememberMinute()
 
     // Focus follows an app by id when the list reorders (move, pin).
@@ -110,7 +114,7 @@ fun AllAppsScreen(
         if (a != null) when (i) {
             0 -> actions.setPinned(a, !a.pinned)
             1 -> actions.hide(a)
-            2 -> moving = a
+            2 -> { moveFrom[0] = apps.indexOfFirst { it.id == a.id }; moving = a }
         }
     }
     menu.onOtherKey = { e ->
@@ -120,7 +124,7 @@ fun AllAppsScreen(
         } else false
     }
 
-    // Move mode: every arrow press moves the app; OK or Back ends it.
+    // Move mode: every arrow press moves the app; OK puts it down, Back puts it back where it was.
     val mover = rememberFocusScreen(0, active = active && moving != null)
     mover.onEdge = { _, d ->
         moving?.let { a ->
@@ -131,7 +135,12 @@ fun AllAppsScreen(
     mover.onClick = { moving = null }
     mover.onOtherKey = { e ->
         if (e.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (e.action == KeyEvent.ACTION_UP) moving = null
+            if (e.action == KeyEvent.ACTION_UP) {
+                val a = moving
+                val now = if (a == null) -1 else apps.indexOfFirst { it.id == a.id }
+                if (a != null && moveFrom[0] >= 0 && now >= 0 && now != moveFrom[0]) actions.move(a, moveFrom[0] - now)
+                moving = null
+            }
             true
         } else false
     }
@@ -145,8 +154,9 @@ fun AllAppsScreen(
                 Box(
                     Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)
                         .edgeFade(
-                            // Fade an edge only while there are rows beyond it.
-                            topAmount = { grid.scrollY.floatValue / 48f },
+                            // Fade the bottom edge only while there are rows beyond it. The top needs
+                            // none: the scroll snaps to whole rows, so a full row sits at the top.
+                            topAmount = { 0f },
                             bottomAmount = { (grid.contentBottom - grid.scrollY.floatValue - grid.viewportBottom) / 48f },
                         ),
                 ) {
@@ -173,24 +183,27 @@ fun AllAppsScreen(
                         }
                     }
                 }
-                val m = menuFor
-                if (m != null) {
-                    // Hold-OK menu pops in: scale 0.96 → 1 with a fade, 160 ms.
-                    val pop = rememberAppear(m, Motion.SHORT)
-                    FocusRoot(menu, Swiss.Focus) {
-                        Row(
-                            Modifier.fillMaxWidth().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(horizontal = 24.dp, vertical = 18.dp),
-                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp),
-                        ) {
-                            Label(m.label, color = Swiss.Ink, modifier = Modifier.weight(1f))
-                            TabText(menu, 0, if (m.pinned) "Unpin from Home" else "Pin to Home", false, SwissType.Row28, Swiss.Ink, marker = false)
-                            TabText(menu, 1, "Hide", false, SwissType.Row28, Swiss.Ink, marker = false)
-                            TabText(menu, 2, "Move", false, SwissType.Row28, Swiss.Ink, marker = false)
-                            TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false)
+                // The Hold-OK menu sits over the footer at the footer's height: the grid never
+                // shrinks, so the focused tile and its name stay in view.
+                Box(Modifier.fillMaxWidth()) {
+                    AppsFooter(grid, apps, moving)
+                    val m = menuFor
+                    if (m != null) {
+                        // Hold-OK menu pops in: scale 0.96 → 1 with a fade, 160 ms.
+                        val pop = rememberAppear(m, Motion.SHORT)
+                        FocusRoot(menu, Swiss.Focus, Modifier.matchParentSize()) {
+                            Row(
+                                Modifier.fillMaxSize().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(start = 24.dp, end = 12.dp, top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(32.dp),
+                            ) {
+                                Label(m.label, color = Swiss.Ink, modifier = Modifier.weight(1f))
+                                MenuItem { TabText(menu, 0, if (m.pinned) "Unpin from Home" else "Pin to Home", false, SwissType.Row28, Swiss.Ink, marker = false) }
+                                MenuItem { TabText(menu, 1, "Hide", false, SwissType.Row28, Swiss.Ink, marker = false) }
+                                MenuItem { TabText(menu, 2, "Move", false, SwissType.Row28, Swiss.Ink, marker = false) }
+                                MenuItem { TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false) }
+                            }
                         }
                     }
-                } else {
-                    AppsFooter(grid, apps, moving)
                 }
             }
         }
@@ -203,14 +216,26 @@ private fun AppsFooter(grid: com.swissdark.launcher.core.focus.FocusScreenState,
     val focusedApp = apps.getOrNull(grid.engine.focused.intValue)
     com.swissdark.launcher.core.design.Footer(
         when {
-            moving != null -> "Moving ${moving.label} · arrows move it, OK puts it down"
+            moving != null -> "Moving ${moving.label}"
             focusedApp?.pinned == true -> "${focusedApp.label} · pinned to Home"
             focusedApp != null -> focusedApp.label
             else -> "No apps"
         },
-        footerKeys,
+        if (moving != null) moveKeys else footerKeys,
     )
 }
+
+/** A menu button that may be a little taller than the footer bar: it overflows evenly, never clips. */
+@Composable
+private fun MenuItem(content: @Composable () -> Unit) {
+    Box(Modifier.wrapContentHeight(unbounded = true)) { content() }
+}
+
+private val moveKeys = listOf(
+    com.swissdark.launcher.core.design.KeyHint("Arrows", "Move"),
+    com.swissdark.launcher.core.design.KeyHint("OK", "Done"),
+    com.swissdark.launcher.core.design.KeyHint("Back", "Cancel"),
+)
 
 // Built once: a press recomposes the footer line, and must not allocate the key hints again.
 private val footerKeys = listOf(

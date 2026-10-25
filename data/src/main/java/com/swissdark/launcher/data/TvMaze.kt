@@ -105,7 +105,6 @@ class TvMazeClient(private val http: OkHttpClient) {
 
 /** Pure JSON → domain mapping, unit-tested against saved TVmaze responses. */
 object TvMazeParse {
-    private val kidsGenres = setOf("Children", "Family")
 
     fun ref(show: JsonObject): TitleRef? {
         val id = show.int("id") ?: return null
@@ -117,6 +116,24 @@ object TvMazeParse {
     fun imdb(show: JsonObject): String? = show.obj("externals")?.str("imdb")
 
     fun genres(show: JsonObject): List<String> = show.arr("genres").mapNotNull { (it as? JsonPrimitive)?.content }
+
+    private val notForKids = setOf("Crime", "Horror", "Thriller", "Adult", "War", "Espionage", "Legal", "Medical", "Supernatural")
+    private val kidsTypes = setOf("Scripted", "Animation")
+
+    /**
+     * Strict kids flag without an age rating: TVmaze's Children genre; or Family on a scripted or
+     * animated show with no adult genre and more than just Drama (reality, talk shows and family
+     * dramas are tagged Family too, but are not for children).
+     */
+    fun kids(show: JsonObject): Boolean {
+        val g = genres(show)
+        if ("Children" in g) return g.none { it in notForKids }
+        if ("Family" !in g) return false
+        if (show.str("type") !in kidsTypes) return false
+        if (g.any { it in notForKids }) return false
+        val rest = g - "Family"
+        return rest.isNotEmpty() && rest != listOf("Drama") || show.str("type") == "Animation"
+    }
 
     fun hit(show: JsonObject): SearchHit.Title? {
         val ref = ref(show) ?: return null
@@ -136,7 +153,7 @@ object TvMazeParse {
             backdropUrl = null,
             meta = meta,
             availability = null,
-            kidsSafe = genres.any { it in kidsGenres },
+            kidsSafe = kids(show),
             popularity = show.int("weight")?.toDouble() ?: 0.0,
         )
     }
@@ -214,7 +231,7 @@ object TvMazeParse {
             trailerKey = null,
             availability = availability(show),
             nextEpisodes = latestSeason(show, today),
-            kidsSafe = genres.any { it in kidsGenres },
+            kidsSafe = kids(show),
             score = rating?.let { "TVmaze $it" },
             source = "TVmaze",
         )

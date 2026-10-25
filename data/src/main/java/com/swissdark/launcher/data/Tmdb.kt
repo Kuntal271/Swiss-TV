@@ -115,10 +115,10 @@ class TmdbApi(private val http: OkHttpClient, private val key: () -> String) {
         val runtime = o.int("runtime") ?: (o["episode_run_time"] as? JsonArray)?.firstOrNull()?.let { (it as JsonPrimitive).intOrNull }
         val cast = (o.obj("credits")?.arr("cast").orEmpty().take(3).map {
             val c = it.jsonObject
-            Person(c.int("id") ?: 0, c.str("name") ?: "", c.str("character") ?: "Actor", "Acting")
+            Person(c.int("id") ?: 0, c.str("name") ?: "", c.str("character") ?: "Actor", "Acting", imageUrl = c.str("profile_path")?.let { p -> img("w185", p) })
         } + o.obj("credits")?.arr("crew").orEmpty().filter { it.jsonObject.str("job") == "Director" }.take(1).map {
             val c = it.jsonObject
-            Person(c.int("id") ?: 0, c.str("name") ?: "", "Director", "Directing")
+            Person(c.int("id") ?: 0, c.str("name") ?: "", "Director", "Directing", imageUrl = c.str("profile_path")?.let { p -> img("w185", p) })
         }).take(4)
         val trailer = o.obj("videos")?.arr("results").orEmpty().map { it.jsonObject }
             .firstOrNull { it.str("site") == "YouTube" && it.str("type") == "Trailer" }?.str("key")

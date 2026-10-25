@@ -161,6 +161,7 @@ class WatchedStore(
     private val scope: CoroutineScope,
     private val tmdb: TmdbClient,
     private val launch: LaunchAdapter,
+    private val http: okhttp3.OkHttpClient? = null,
     private val onChanged: () -> Unit,
 ) {
     private val db by lazy { WatchedDb.open(context) }
@@ -343,7 +344,79 @@ class WatchedStore(
         // While a title plays, Home is out of sight: tell it on pause/stop and on a new title only.
         if (old == null || !sameEpisode || !s.playing) onChanged()
         if (!row.tmdbTried && s.packageName != YOUTUBE && s.packageName != CRUNCHYROLL && tmdb.hasKey) matchTmdb(row)
+        if (s.packageName == YOUTUBE && youTubeId(row) == null) scope.launch { resolveYouTube(row) }
     }
+
+    // ---- YouTube: its session carries no video id ----
+
+    private val ytPrefs by lazy { context.getSharedPreferences("youtube_ids", Context.MODE_PRIVATE) }
+    private val ytResolving = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** The row's video id: the session's media id when it is one, else the one found by [resolveYouTube]. */
+    private fun youTubeId(row: WatchedRow): String? =
+        row.mediaId?.takeIf { YT_ID.matches(it) } ?: ytPrefs.getString(ytKey(row), null)
+
+    private fun ytKey(row: WatchedRow) = row.key + "|" + norm(row.episodeTitle.orEmpty())
+
+    /**
+     * Finds the video on youtube.com's search page ("<title> <channel>"): the first result whose
+     * title matches. Remembered per row; its thumbnail becomes the card's (sharp, 16:9) art.
+     */
+    private suspend fun resolveYouTube(row: WatchedRow): String? {
+        val client = http ?: return null
+        val k = ytKey(row)
+        ytPrefs.getString(k, null)?.let { return it }
+        if (!ytResolving.add(k)) return null
+        try {
+            val q = java.net.URLEncoder.encode(listOfNotNull(row.show, row.episodeTitle).joinToString(" "), "UTF-8")
+            val req = okhttp3.Request.Builder().url("https://www.youtube.com/results?search_query=$q")
+                .header("User-Agent", DESKTOP_UA).header("Accept-Language", "en").build()
+            val (code, html) = withContext(Dispatchers.IO) { client.fetch(req) }
+            if (code != 200) return null
+            val hit = YouTubeParse.firstMatch(html, row.show) ?: return null
+            ytPrefs.edit().putString(k, hit.id).putString("$k|art", hit.thumb).apply()
+            // Sharper art than the session's small bitmap, for the card and the focus backdrop.
+            withContext(writer) {
+                val cur = db.dao().get(row.key) ?: return@withContext
+                if (cur.tmdbArt != hit.thumb) {
+                    val next = cur.copy(tmdbArt = hit.thumb)
+                    db.dao().put(next); known[row.key] = next
+                    onChanged()
+                }
+            }
+            return hit.id
+        } catch (e: Exception) {
+            Log.w(MediaSessionWatcher.TAG, "youtube lookup failed", e)
+            return null
+        } finally {
+            ytResolving.remove(k)
+        }
+    }
+
+    /**
+     * YouTube: the live session if it is still on this video, else the video itself at the
+     * position reached (youtube.com/watch?v=…&t=…s, which YouTube for TV opens in its player).
+     * The id is looked up when unknown (a second or two); only if that fails, YouTube's search.
+     */
+    private fun openYouTube(row: WatchedRow, key: String): Boolean {
+        if (started && liveKeyByPkg[row.pkg] == key && watcher.isLive(row.pkg)) {
+            val pi = watcher.sessionActivity(row.pkg)
+            if (pi != null && send(pi)) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ watcher.play(row.pkg) }, 800)
+                return true
+            }
+        }
+        youTubeId(row)?.let { if (launch.openUri(watchUrl(it, row), row.pkg)) return true }
+        scope.launch(Dispatchers.Main) {
+            val id = kotlinx.coroutines.withTimeoutOrNull(4_000) { resolveYouTube(row) }
+            val ok = id != null && launch.openUri(watchUrl(id, row), row.pkg)
+            if (!ok && !launch.search(row.pkg, listOfNotNull(row.show, row.episodeTitle).joinToString(" "))) launch.launchPackage(row.pkg)
+        }
+        return true
+    }
+
+    private fun watchUrl(id: String, row: WatchedRow) =
+        "https://www.youtube.com/watch?v=$id" + if (row.positionMs > 5_000) "&t=${row.positionMs / 1000}s" else ""
 
     /** Series/film name → TMDB, for real details on the Up next page. Exact name matches only. */
     private suspend fun matchTmdb(row: WatchedRow) {
@@ -404,6 +477,7 @@ class WatchedStore(
         val key = uri.removePrefix(PREFIX)
         val row = known[key] ?: return false
         if (row.appOnly) return openApp(row)
+        if (row.pkg == YOUTUBE) return openYouTube(row, key)
         if (liveKeyByPkg[row.pkg] == key) {
             val pi = if (started) watcher.sessionActivity(row.pkg) else null
             if (pi != null && send(pi)) return true
@@ -422,7 +496,8 @@ class WatchedStore(
     private fun openApp(row: WatchedRow): Boolean {
         val live = started && watcher.isLive(row.pkg)
         val pi = if (live) watcher.sessionActivity(row.pkg) else null
-        if (!(pi != null && send(pi)) && !launch.launchPackage(row.pkg)) return false
+        // Not live: open the app it belongs to (the old JioCinema stub → JioHotstar).
+        if (!(pi != null && send(pi)) && !launch.launchPackage(if (live) row.pkg else com.swissdark.launcher.domain.Providers.resolve(row.pkg))) return false
         if (live) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ watcher.play(row.pkg) }, 800)
         return true
     }
@@ -456,6 +531,7 @@ class WatchedStore(
         private const val MIN_WATCHED_MS = 15_000L
         private const val MIN_DURATION_MS = 90_000L
         private val YT_ID = Regex("[A-Za-z0-9_-]{11}")
+        private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
         private val PLACEHOLDERS = setOf(
             "primevideo", "netflix", "youtube", "crunchyroll", "jiohotstar", "hotstar", "jiocinema",
             "advertisement", "ad", "loading", "live", "unknown",
@@ -481,4 +557,36 @@ class WatchedStore(
             return TitleRef(id, type, row.show)
         }
     }
+}
+
+
+/** youtube.com search-page parsing (pure, unit-tested). */
+object YouTubeParse {
+    data class Hit(val id: String, val title: String, val thumb: String)
+
+    private val RENDERER = Regex(""""videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"""")
+    private val TITLE = Regex(""""title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"""")
+    private val UNI = Regex("""\\u([0-9a-fA-F]{4})""")
+
+    fun results(html: String, max: Int = 8): List<Hit> = RENDERER.findAll(html).take(max).mapNotNull { m ->
+        val seg = html.substring(m.range.last + 1, minOf(html.length, m.range.last + 4_000))
+        val t = TITLE.find(seg)?.groupValues?.get(1) ?: return@mapNotNull null
+        val id = m.groupValues[1]
+        val thumb = if (seg.substringBefore("\"title\"").contains("/hq720.jpg")) "https://i.ytimg.com/vi/$id/hq720.jpg"
+        else "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+        Hit(id, unescape(t), thumb)
+    }.toList()
+
+    /** The first result whose title is [title] (normalised; a session's title may be cut short). */
+    fun firstMatch(html: String, title: String): Hit? {
+        val want = WatchedStore.norm(title)
+        if (want.length < 3) return null
+        return results(html).firstOrNull { h ->
+            val n = WatchedStore.norm(h.title)
+            n == want || (want.length >= 12 && (n.startsWith(want) || want.startsWith(n) && n.length >= 12))
+        }
+    }
+
+    fun unescape(s: String): String = UNI.replace(s) { it.groupValues[1].toInt(16).toChar().toString() }
+        .replace("\\\"", "\"").replace("\\/", "/").replace("\\\\", "\\")
 }

@@ -45,7 +45,10 @@ internal const val SEEN_CAP = 1_500
 /** inMyPlan = provider is in the user's services list in Settings. */
 fun Availability.withPlan(s: LauncherSettings): Availability {
     val key = Providers.byTmdb(providerId)?.key ?: Providers.all.firstOrNull { it.name == providerName }?.key
-    return copy(inMyPlan = key != null && key in s.myServices)
+    // Cached details may name an old package (JioCinema): always hand out the installed one.
+    val pkg = packageName?.let { Providers.resolve(it) }
+        ?: Providers.byTmdb(providerId)?.let { with(Providers) { it.installedPackage } }
+    return copy(inMyPlan = key != null && key in s.myServices, packageName = pkg)
 }
 
 /** On your services = something you can press Play on today without paying more. */
@@ -305,17 +308,27 @@ class AppLauncherImpl(
     private val onLaunched: (RefreshReason) -> Unit,
 ) : AppLauncher {
     override fun launch(app: AppId): LaunchResult {
-        val ok = launch.launchComponent(app.component) || launch.launchPackage(app.packageName)
+        // An alias (the old JioCinema stub) opens the app it moved to.
+        val to = Providers.resolve(app.packageName)
+        val ok = (to != app.packageName && launch.launchPackage(to)) ||
+            launch.launchComponent(app.component) || launch.launchPackage(app.packageName)
         if (ok) {
             scope.launch(Dispatchers.Default) {
-                habits.record(app.packageName, System.currentTimeMillis())
+                habits.record(Providers.resolve(app.packageName), System.currentTimeMillis())
                 habits.save()
             }
         }
         return if (ok) LaunchResult.Ok else LaunchResult.Failed("Couldn’t open ${app.packageName}")
     }
 
+    /**
+     * True when [pkg] can be handed a title (a search it really runs). Netflix, Prime Video and
+     * JioHotstar resolve search intents on this TV but just open their home: tell the user first.
+     */
+    fun opensTitles(pkg: String): Boolean = pkg !in HOME_ONLY && acceptsSearch(pkg)
+
     private fun acceptsSearch(pkg: String): Boolean {
+        if (pkg in HOME_ONLY) return false
         settings.settings.value.searchIntentApps[pkg]?.let { return it }
         val ok = launch.acceptsSearch(pkg)
         settings.update { it.copy(searchIntentApps = it.searchIntentApps + (pkg to ok)) }
@@ -334,6 +347,13 @@ class AppLauncherImpl(
         val app = apps.apps.value.firstOrNull { it.id.packageName == pkg }
         val ok = (app != null && launch.launchComponent(app.id.component)) || launch.launchPackage(pkg)
         return if (ok) LaunchResult.OpenedAppHome else LaunchResult.Failed("$pkg is not installed")
+    }
+
+    companion object {
+        /** Apps seen on the TV to ignore search intents (they open on their home screen). */
+        val HOME_ONLY = setOf(
+            "com.netflix.ninja", "com.amazon.amazonvideo.livingroom", "in.startv.hotstar", "com.jio.media.stb.ondemand",
+        )
     }
 
     override fun openTrailer(youtubeKey: String): LaunchResult =

@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -85,13 +87,21 @@ private fun PanelFrame(wallpaper: PreparedWallpaper, width: Dp, content: @Compos
     // canvas translation), so the panel's rows keep their layout positions throughout.
     val progress = LocalScreenProgress.current
     val slide = with(LocalDensity.current) { width.toPx() }
-    Row(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxHeight().graphicsLayer { alpha = progress() }) {
+    Box(Modifier.fillMaxSize()) {
+        // The scrim covers the whole screen (the panel slides in over it, so no undimmed sliver of
+        // Home shows beside the panel) and is opaque by half-way. The panel's dim clock comes in
+        // only after that, so Home's clock and this one never show together.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = (progress() * 2f).coerceAtMost(1f) }) {
             Backdrop(wallpaper, totalDim = 0.6f)
-            T(now.format(Fmt.clock), SwissType.ClockPanel, Modifier.align(Alignment.BottomStart).padding(start = 120.dp, bottom = 120.dp), Swiss.DimClock)
+            T(
+                now.format(Fmt.clock), SwissType.ClockPanel,
+                Modifier.align(Alignment.BottomStart).padding(start = 120.dp, bottom = 120.dp)
+                    .graphicsLayer { alpha = ((progress() - 0.5f) * 2f).coerceIn(0f, 1f) },
+                PanelClock,
+            )
         }
         Box(
-            Modifier.width(width).fillMaxHeight().drawSlide(progress, dx = slide, fade = false).background(Swiss.Panel).leftRule()
+            Modifier.align(Alignment.CenterEnd).width(width).fillMaxHeight().drawSlide(progress, dx = slide, fade = false).background(Swiss.Panel).leftRule()
                 .padding(72.dp),
         ) { content() }
     }
@@ -129,6 +139,8 @@ private fun PanelRow(
 }
 
 private val RowPadX = 24.dp
+/** Dim, but readable over the wallpaper (DimClock was too faint there). */
+private val PanelClock = Color(0xFF8E8E96)
 
 // ---------------------------------------------------------------- Inputs
 
@@ -203,6 +215,8 @@ private val rowSizes = intArrayOf(pictures.size, sounds.size, sleeps.size, 1, 1,
 
 /** Label column; values start at the same x on every row. */
 private val LabelCol = 170.dp
+/** Horizontal padding inside an option chip. */
+private val OptionPadX = 14.dp
 
 
 @Composable
@@ -217,19 +231,16 @@ fun QuickSettingsPanel(
     active: Boolean,
 ) {
     val context = LocalContext.current
-    val pictureSel = pictures.indexOfFirst { it.first == (picture ?: PictureMode.STANDARD) }.coerceAtLeast(0)
-    val soundSel = sounds.indexOfFirst { it.first == (sound ?: SoundMode.STANDARD) }.coerceAtLeast(0)
-    val sleepSel = sleeps.indexOfFirst { it.first == sleepMinutes }.coerceAtLeast(0)
-    fun selectedOf(row: Int) = when (row) {
-        ROW_PICTURE -> pictureSel
-        ROW_SOUND -> soundSel
-        ROW_SLEEP -> sleepSel
-        else -> 0
-    }
+    // The TV's real picture / sound / sleep state can't be read: OK opens TCL's own page for the
+    // option, so no option is ever marked as the current one (the launcher's last pick isn't it).
+    val pictureSel = -1
+    val soundSel = -1
+    val sleepSel = -1
+    fun selectedOf(@Suppress("UNUSED_PARAMETER") row: Int) = 0
 
     val focus = rememberFocusScreen(ROWS, initial = ROW_PICTURE, active = active)
     // Option under the D-pad in the focused row. Entering a row puts it on the current value.
-    val cursor = remember { mutableIntStateOf(pictureSel) }
+    val cursor = remember { mutableIntStateOf(0) }
     focus.onFocusChanged = { row -> cursor.intValue = selectedOf(row) }
     focus.onEdge = { row, dir ->
         val c = cursor.intValue
@@ -266,7 +277,7 @@ fun QuickSettingsPanel(
                     ValueRow(focus, ROW_NETWORK, "Network", networkName, last = false)
                     ValueRow(focus, ROW_SCREEN, "Screen", "Picture off, sound on", last = true)
                 }
-                Box(Modifier.weight(1f))
+                Spacer(Modifier.height(48.dp))
                 LinksRow(focus, ROW_LINKS, linkNames, cursor)
             }
         }
@@ -296,10 +307,10 @@ private fun OptionRow(focus: FocusScreenState, index: Int, label: String, option
         ) {
             for ((k, o) in options.withIndex()) {
                 val on = remember(focused, k) { { focused.value && cursor.intValue == k } }
-                val base = if (k == selected) Swiss.Ink else Swiss.Muted
+                val base = Swiss.Ink   // shortcuts to TCL's pages; none is "current"
                 val color = remember(on, base) { ColorProducer { if (on()) Swiss.Ground else base } }
                 Row(
-                    Modifier.drawBehind { if (on()) drawRect(Swiss.Focus) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                    Modifier.drawBehind { if (on()) drawRect(Swiss.Focus) }.padding(horizontal = OptionPadX, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (k == selected) {
@@ -318,7 +329,8 @@ private fun OptionRow(focus: FocusScreenState, index: Int, label: String, option
 private fun ValueRow(focus: FocusScreenState, index: Int, label: String, value: String, last: Boolean) {
     PanelRow(focus, index, last) { c ->
         RowLabel(label, c.muted)
-        TDraw(value, SwissType.Row30, c.ink, Modifier.weight(1f).alignByBaseline().padding(vertical = 24.dp), maxLines = 1)
+        // 14 px in: the value's text starts where the option chips' text does.
+        TDraw(value, SwissType.Row30, c.ink, Modifier.weight(1f).alignByBaseline().padding(start = OptionPadX, top = 24.dp, bottom = 24.dp), maxLines = 1)
     }
 }
 

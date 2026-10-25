@@ -113,7 +113,11 @@ class TitleSources(
         if (mz.isFailure && o.isFailure) throw (mz.exceptionOrNull() as? IOException ?: IOException("No title source reachable"))
         val shows = mz.getOrNull().orEmpty()
         shows.forEach { note(it.second) }
-        val merged = merge(q, shows.mapNotNull { (s, show) -> TvMazeParse.hit(show)?.let { it to s } }, o.getOrNull().orEmpty())
+        val years = HashMap<String, Int>()
+        val mazeHits = shows.mapNotNull { (s, show) ->
+            TvMazeParse.hit(show)?.also { h -> show.str("premiered")?.take(4)?.toIntOrNull()?.let { years[h.key] = it } }?.let { it to s }
+        }
+        val merged = merge(q, mazeHits, o.getOrNull().orEmpty(), years)
         val people = ppl.await().getOrNull().orEmpty().filter { it.first >= 0.5 }.take(3)
             .mapNotNull { TvMazeParse.person(it.second)?.let { p -> SearchHit.PersonHit(p) } }
         merged + people
@@ -157,7 +161,13 @@ class TitleSources(
             (0 until 7).map { d ->
                 async { runCatching { tvmaze.schedule(today.minusDays(d.toLong()).toString(), web = true, country = null) }.getOrNull().orEmpty() }
             }.awaitAll().flatten().distinctBy { it.int("id") }
-                .filter { s -> if (genre == "Documentary") s.str("type") == "Documentary" else TvMazeParse.genres(s).any { it in want } }
+                .filter { s ->
+                    when (genre) {
+                        "Documentary" -> s.str("type") == "Documentary"
+                        "Kids" -> TvMazeParse.kids(s)
+                        else -> TvMazeParse.genres(s).any { it in want }
+                    }
+                }
                 .also { l -> l.forEach { note(it) } }
                 .let { rankAiring(it) }
         }
@@ -241,6 +251,7 @@ class TitleSources(
 
     companion object {
         fun norm(s: String) = LocalIndex.normalize(s)
+        private val YEAR = Regex("\\b(19|20)\\d\\d\\b")
 
         /**
          * One list from both sources, joined on the IMDb id (TVmaze shows carry it in externals).
@@ -248,7 +259,12 @@ class TitleSources(
          * a group, the best position either source gave it (OMDb lists by IMDb popularity,
          * TVmaze by relevance), then exact names, then titles with a poster.
          */
-        fun merge(q: String, maze: List<Pair<SearchHit.Title, Double>>, omdb: List<SearchHit.Title>): List<SearchHit.Title> {
+        fun merge(
+            q: String,
+            maze: List<Pair<SearchHit.Title, Double>>,
+            omdb: List<SearchHit.Title>,
+            mazeYears: Map<String, Int> = emptyMap(),
+        ): List<SearchHit.Title> {
             val nq = norm(q)
             val hits = LinkedHashMap<String, SearchHit.Title>()
             val rank = HashMap<String, Int>()
@@ -256,11 +272,22 @@ class TitleSources(
                 val h = p.first
                 if (hits.putIfAbsent(h.key, h) == null) rank[h.key] = i
             }
+            fun year(h: SearchHit.Title): Int? = mazeYears[h.key] ?: YEAR.find(h.meta)?.value?.toIntOrNull()
             for ((i, h) in omdb.withIndex()) {
-                val old = hits[h.key]
-                if (old == null) hits[h.key] = h
-                else if (old.posterUrl == null && h.posterUrl != null) hits[h.key] = old.copy(posterUrl = h.posterUrl)
-                rank[h.key] = minOf(rank[h.key] ?: Int.MAX_VALUE, i)
+                // Same title under another id (OMDb and TVmaze disagree, or OMDb lists a stub
+                // entry): same name, same type, year within one. One card, the first one's art.
+                val key = if (h.key in hits) h.key else hits.values.firstOrNull { o ->
+                    o.ref.type == h.ref.type && norm(o.ref.name) == norm(h.ref.name) &&
+                        year(o).let { a -> val b = year(h); a == null || b == null || kotlin.math.abs(a - b) <= 1 }
+                }?.key
+                if (key == null) {
+                    hits[h.key] = h
+                    rank[h.key] = i
+                    continue
+                }
+                val old = hits.getValue(key)
+                if (old.posterUrl == null && h.posterUrl != null) hits[key] = old.copy(posterUrl = h.posterUrl)
+                rank[key] = minOf(rank[key] ?: Int.MAX_VALUE, i)
             }
             fun group(name: String): Int {
                 val n = norm(name)
@@ -270,7 +297,8 @@ class TitleSources(
                     else -> 2
                 }
             }
-            return hits.values.sortedWith(
+            // No art and the name does not even contain the query: noise, not a result.
+            return hits.values.filter { it.posterUrl != null || group(it.ref.name) < 2 }.sortedWith(
                 compareBy<SearchHit.Title> { group(it.ref.name) }
                     .thenBy { rank[it.key] ?: Int.MAX_VALUE }
                     .thenBy { if (norm(it.ref.name) == nq) 0 else 1 }

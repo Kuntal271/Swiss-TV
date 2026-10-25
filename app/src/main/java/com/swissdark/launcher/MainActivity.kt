@@ -11,7 +11,10 @@ import android.view.KeyEvent
 import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
-import androidx.activity.compose.setContent
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import androidx.compose.ui.platform.ComposeView
+import com.swissdark.launcher.feature.search.SearchInput
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateListOf
@@ -43,13 +46,28 @@ class MainActivity : ComponentActivity() {
         // Back is handled by each screen through the key router; anything that reaches the system
         // back path pops one route and never finishes Home (a launcher has nowhere to go back to).
         onBackPressedDispatcher.addCallback(this) { pop() }
-        setContent {
-            DesignCanvas {
-                CompositionLocalProvider(LocalAppArt provides graph.art, com.swissdark.launcher.core.design.LocalAppGlyph provides com.swissdark.launcher.data.AppGlyphs::of) {
-                    AppRoot(graph, routes, this)
+        val compose = ComposeView(this).apply {
+            setContent {
+                DesignCanvas {
+                    CompositionLocalProvider(LocalAppArt provides graph.art, com.swissdark.launcher.core.design.LocalAppGlyph provides com.swissdark.launcher.data.AppGlyphs::of) {
+                        AppRoot(graph, routes, this@MainActivity)
+                    }
                 }
             }
         }
+        // Root that sees every key before the IME does (see [preIme]). It is focusable so the
+        // window's focus chain always runs through it, even when Compose holds no view focus.
+        root = object : FrameLayout(this) {
+            override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean =
+                preIme(event) || super.dispatchKeyEventPreIme(event)
+        }.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            addView(compose, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        setContentView(root)
+        root.requestFocus()
         // Only after the first frame: refreshers, receivers, image cache warm-up.
         val decor = window.decorView
         decor.viewTreeObserver.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
@@ -75,7 +93,12 @@ class MainActivity : ComponentActivity() {
             if (routes.size > 1) {
                 routes.clear(); routes.add(Route.Home)
             }
-            com.swissdark.launcher.core.focus.HomePress.press()
+            SearchInput.reset()
+            // Only while Home was already in front (started; paused for the intent): coming back from an app (we were stopped)
+            // keeps focus on the card or tile that launched it.
+            if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                com.swissdark.launcher.core.focus.HomePress.press()
+            }
         }
     }
 
@@ -112,8 +135,35 @@ class MainActivity : ComponentActivity() {
     // with @RestrictTo for its own KeyEventDispatcher, which lint misreports as a restricted call.
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // A navigation key the IME passed back while Search was typing: the keyboard is gone.
+        if (!viaPreIme && SearchInput.editing && event.keyCode in NAV_KEYS) SearchInput.imeClosed()
+        if (routes.lastOrNull() == Route.Search && SearchInput.keyHook?.invoke(event) == true) return true
         if (KeyRouter.dispatch(event)) return true
         return super.dispatchKeyEvent(event)
+    }
+
+    private lateinit var root: FrameLayout
+
+    /**
+     * Navigation keys skip the IME unless the user is typing in Search with the keyboard up.
+     * Otherwise Android hands every key to the IME first (it keeps a fallback connection on the
+     * focused window), and a stale or dead IME process (EPIPE) silently drops them: the launcher
+     * then answers only Home. Letters and other keys still take the normal path.
+     */
+    private fun preIme(e: KeyEvent): Boolean {
+        if (e.keyCode !in NAV_KEYS) return false
+        if (SearchInput.editing) return false
+        viaPreIme = true
+        try { dispatchKeyEvent(e) } finally { viaPreIme = false }
+        return true
+    }
+
+    private var viaPreIme = false
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Keep the focus chain through [root] so [preIme] always runs.
+        if (hasFocus && ::root.isInitialized && !root.hasFocus()) root.requestFocus()
     }
 
 
@@ -151,6 +201,11 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val HIDDEN_REFRESH_MS = 30_000L
+        val NAV_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU,
+        )
     }
 
     fun openPlayStore(pkg: String) {

@@ -35,6 +35,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import com.swissdark.launcher.core.design.Backdrop
+import com.swissdark.launcher.core.design.edgeFade
 import com.swissdark.launcher.core.design.LocalReduceMotion
 import com.swissdark.launcher.core.design.Motion
 import com.swissdark.launcher.core.design.drawSlide
@@ -115,6 +116,8 @@ fun LauncherSettingsScreen(
     actions: SettingsActions,
     active: Boolean,
     initialSection: Int = 1,
+    /** Where Back goes ("Home", or "Quick settings" when opened from there). */
+    backTo: String = "Home",
 ) {
     var section by remember { mutableIntStateOf(initialSection) }
     var slot by remember { mutableStateOf(TimeSlot.at(LocalTime.now())) }
@@ -130,6 +133,10 @@ fun LauncherSettingsScreen(
         else -> aboutSection(info)
     }
     val focus = rememberFocusScreen(sections.size + content.count, initial = initialSection, active = active)
+    focus.preferTop = true
+    val S = sections.size
+    // The last content row focused in each section: RIGHT goes back to it.
+    val lastIn = remember { IntArray(sections.size) { -1 } }
     // Moving through the section list does not rebuild the right side on every press: the
     // section under focus is shown once focus rests on it (SECTION_DWELL_MS), on OK, or as soon
     // as focus moves right into the content.
@@ -144,6 +151,7 @@ fun LauncherSettingsScreen(
     focus.onFocusChanged = { i ->
         val wasPending = nav.pending != null
         nav.cancel()
+        if (i >= S) lastIn[section] = i - S
         if (i < sections.size) {
             nav.row = i
             if (i != section) nav.pending = scope.launch { delay(SECTION_DWELL_MS); nav.pending = null; show(i) }
@@ -151,16 +159,30 @@ fun LauncherSettingsScreen(
             // RIGHT before the dwell ran out: open that row's section and enter it at the top.
             val target = nav.row
             show(target)
-            focus.focus(if (contentCount(target, catalog, allApps) > 0) sections.size else target)
+            focus.focus(if (contentCount(target, catalog, allApps) > 0) S + entryOf(target, lastIn, allApps) else target)
         }
     }
     focus.onEdge = { i, dir ->
         // RIGHT from a row whose section is not shown yet and whose shown section has nothing to enter.
         if (dir == DpadKey.RIGHT && i < sections.size && i != section && contentCount(i, catalog, allApps) > 0) {
             show(i)
-            focus.focus(sections.size)
+            focus.focus(S + entryOf(i, lastIn, allApps))
             true
         } else false
+    }
+    // Focus inside a section's content stays there: LEFT goes to the section shown (never the
+    // row beside it, whose dwell would switch sections), UP/DOWN never leave the content.
+    // RIGHT from the shown section's entry enters at its first (or last focused) row.
+    focus.redirect = { from, to, dir ->
+        when {
+            from >= S && to < S -> if (dir == DpadKey.LEFT) section else from
+            from < S && to >= S && from == section -> S + entryOf(section, lastIn, allApps)
+            else -> to
+        }
+    }
+    val baseEdge = focus.onEdge
+    focus.onEdge = { i, dir ->
+        if (dir == DpadKey.LEFT && i >= S) { focus.focus(section, animate = true); true } else baseEdge(i, dir)
     }
     focus.onClick = { i -> if (i >= sections.size) content.click(i - sections.size) else show(i) }
     focus.onOtherKey = { e ->
@@ -174,7 +196,7 @@ fun LauncherSettingsScreen(
         Backdrop(wallpaper, totalDim = 0.85f)
         FocusRoot(focus, Swiss.Focus) {
             Frame {
-                Header(deviceName.uppercase(), now.format(Fmt.clock), "Launcher v${info.version}", "Settings")
+                Header(deviceName.uppercase(), now.format(Fmt.clock), "", "Launcher settings")
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(3))) {
                         for ((i, s) in sections.withIndex()) {
@@ -186,14 +208,20 @@ fun LauncherSettingsScreen(
                     Box(Modifier.width(Swiss.span(1)))
                     // A new section fades in with a 16 px slide (draw phase: rows keep their layout).
                     val sectionIn = rememberAppear(section, Motion.MEDIUM, from = 0.2f)
-                    Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().focusViewport(focus)) {
+                    Box(
+                        Modifier.weight(1f).fillMaxHeight().clipToBounds().focusViewport(focus)
+                            .edgeFade(
+                                topAmount = { focus.scrollY.floatValue / 48f },
+                                bottomAmount = { (focus.contentBottom - focus.scrollY.floatValue - focus.viewportBottom) / 48f },
+                            ),
+                    ) {
                         Column(Modifier.fillMaxWidth().drawSlide({ sectionIn.value }, dx = Motion.ITEM_SLIDE).focusScroll(focus), verticalArrangement = Arrangement.spacedBy(26.dp)) {
                             T(sections[section], SwissType.Hero)
                             content.body(focus, sections.size)
                         }
                     }
                 }
-                Footer("Settings and viewing habits stay on the TV", footerKeys)
+                Footer("Settings and viewing habits stay on the TV", remember(backTo) { listOf(KeyHint("Back", backTo)) })
             }
         }
     }
@@ -201,7 +229,12 @@ fun LauncherSettingsScreen(
 
 private const val SECTION_DWELL_MS = 350L
 
-private val footerKeys = listOf(KeyHint("Back", "Home"))
+/** Content row RIGHT enters section [s] at: the last one focused there, else its top row. */
+private fun entryOf(s: Int, lastIn: IntArray, apps: List<AppEntry>): Int =
+    lastIn.getOrElse(s) { -1 }.takeIf { it >= 0 } ?: when (s) {
+        3 -> apps.size + 1   // Apps: "Icon pack" is drawn first
+        else -> 0
+    }
 
 
 /** The section row under focus and its pending switch (plain fields: touched from key handling only). */
@@ -216,10 +249,10 @@ private class SectionNav {
 
 /** Focus items in section [s] (must match the counts the section builders below report). */
 private fun contentCount(s: Int, catalog: List<Wallpaper>, apps: List<AppEntry>): Int = when (s) {
-    0 -> 2
+    0 -> 1
     1 -> 4 + minOf(catalog.size, 11) + 1 + 2
-    2 -> serviceKeys.size + 1
-    3 -> apps.size + 1
+    2 -> serviceKeys.size + 2
+    3 -> apps.size + 2
     else -> 0
 }
 
@@ -252,17 +285,15 @@ private fun onOff(b: Boolean) = if (b) "On" else "Off"
 // ---------- sections ----------
 
 private fun homeSection(s: LauncherSettings, a: SettingsActions) = SectionContent(
-    count = 2,
+    count = 1,
     click = { i ->
         when (i) {
             0 -> a.update { it.copy(showUpNext = !it.showUpNext) }
-            1 -> a.update { it.copy(showLatencyOverlay = !it.showLatencyOverlay) }
         }
     },
 ) { f, base ->
     Column {
         ValueRow(f, base, "Show Continue watching", onOff(s.showUpNext))
-        ValueRow(f, base + 1, "Key latency overlay", onOff(s.showLatencyOverlay))
         InfoRow("Apps on Home", "6, by habit · pinned first")
         InfoRow("Clock", "24-hour", last = true)
     }
@@ -308,7 +339,7 @@ private fun wallpaperSection(
                             T(sl.label, SwissType.Card)
                             if (sl == nowSlot) T(" · now", SwissType.Card, color = Swiss.Muted)
                         }
-                        T("${sl.range} · ${wp?.name ?: "none"}", SwissType.Meta, maxLines = 1)
+                        T("${sl.range} · ${wp?.name ?: "none"}", SwissType.Meta, maxLines = 2)
                     }
                 }
             }
@@ -324,7 +355,8 @@ private fun wallpaperSection(
                             val wp = picks[k]
                             val chosen = s.wallpaperBySlot[slot.name] == wp.id
                             Thumb(f, base + 4 + k, wp, 96, a, Modifier.weight(1f), selected = chosen) {
-                                T(wp.name, SwissType.Tile, color = if (chosen) Swiss.Ink else Swiss.Muted, maxLines = 1)
+                                // Two lines: names like "Alpine Milky Way" never end in "Alpine Milk…".
+                                T(wp.name, SwissType.Tile, color = if (chosen) Swiss.Ink else Swiss.Muted, maxLines = 2)
                             }
                         }
                         k == picks.size -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -371,9 +403,13 @@ private fun Thumb(
     selected: Boolean,
     caption: @Composable () -> Unit,
 ) {
-    var bmp by remember(wp?.id, h) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(wp?.id, h) {
-        if (wp != null) bmp = withContext(Dispatchers.IO) { a.thumbnail(wp, h * 16 / 9, h) }
+    val cacheKey = "${wp?.id}@$h"
+    val cached = remember(cacheKey) { thumbCache.get(cacheKey) }
+    var bmp by remember(cacheKey) { mutableStateOf(cached) }
+    LaunchedEffect(cacheKey) {
+        if (wp != null && bmp == null) {
+            bmp = withContext(Dispatchers.IO) { a.thumbnail(wp, h * 16 / 9, h) }?.also { thumbCache.put(cacheKey, it) }
+        }
     }
     // Selection: the amber rule under the picked thumbnail draws out from the centre.
     val reduce = LocalReduceMotion.current
@@ -396,13 +432,17 @@ private fun Thumb(
         ) {
             // Thumbnails fade in as they decode.
             bmp?.let {
-                val fade = rememberAppear(it, Motion.MEDIUM)
+                // Already decoded (section switch, slot change): drawn at once, no grey flash.
+                val fade = rememberAppear(it, Motion.MEDIUM, from = if (it === cached) 1f else 0f)
                 Image(remember(it) { it.asImageBitmap() }, null, Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }, contentScale = ContentScale.Crop)
             }
         }
         caption()
     }
 }
+
+/** Decoded thumbnails survive section switches (a few MB at most: 96–150 px tall). */
+private val thumbCache = android.util.LruCache<String, Bitmap>(24)
 
 private val serviceKeys = listOf("netflix", "prime", "jiohotstar", "sonyliv", "zee5", "appletv", "crunchyroll", "youtube")
 
@@ -458,8 +498,7 @@ private fun appsSection(s: LauncherSettings, apps: List<AppEntry>, a: SettingsAc
 private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
     Column {
         InfoRow("Home button", if (info.isHome) "Swiss Home" else "Not set to Swiss Home")
-        InfoRow("Google TV Home", "Off")
-        InfoRow("Mic", "Google Assistant · Search here: Mic")
+        InfoRow("Mic", "Voice search")
         InfoRow("Input", "Inputs panel")
         InfoRow("Menu", "Quick settings · hold: Launcher settings")
         InfoRow("Back on Home", "First card, then Search", last = true)
@@ -471,17 +510,12 @@ private fun aboutSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
         InfoRow("Version", info.version)
         InfoRow("Home app", if (info.isHome) "This launcher" else "Not set")
         InfoRow("Usage access (habits)", if (info.usageAccess) "Granted" else "Not granted")
-        InfoRow("Watch Next", info.watchNext)
-        InfoRow(
-            "Titles",
-            if (info.titleSource == "TMDB") "TMDB" else info.titleSource + " · TMDB key " + if (info.tmdb) "refused or unreachable" else "missing",
-            last = true,
-        )
+        InfoRow("Titles", info.titleSource, last = true)
         T(
             (if (info.titleSource == "TMDB") "Titles and artwork: TMDB. Where to watch: JustWatch. "
-            else "Titles: ${info.titleSource} (TMDB is used when its key works). Where to watch: TVmaze channels, approximate. ") +
+            else "Titles: ${info.titleSource}. Where to watch: TVmaze channels, approximate. ") +
                 "Icons: Tabler Icons (MIT). Type: Inter (OFL). " +
-                "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+                if (info.titleSource == "TMDB") "This product uses the TMDB API but is not endorsed or certified by TMDB." else "",
             SwissType.Body, Modifier.padding(top = 24.dp),
         )
     }

@@ -87,11 +87,16 @@ class AppsRepositoryImpl(
      */
     @Synchronized
     fun reload(rescan: Boolean = true) {
-        val raw = scanned.takeUnless { rescan } ?: packages.launchable().also { scanned = it }
+        val raw = scanned.takeUnless { rescan } ?: packages.launchable().also { l ->
+            scanned = l
+            Providers.installed = l.mapTo(HashSet()) { it.packageName }
+        }
         val s = settings.settings.value
         val pinned = s.pinned.toHashSet()
         val list = raw.map {
-            AppEntry(AppId(it.component), it.label, AppGlyphs.of(it.packageName), it.packageName in pinned)
+            // The old JioCinema app is only a "go to JioHotstar" stub once JioHotstar is installed.
+            val moved = Providers.resolve(it.packageName) != it.packageName
+            AppEntry(AppId(it.component), if (moved) "JioCinema (moved)" else it.label, AppGlyphs.of(it.packageName), it.packageName in pinned)
         }
         val order = s.customOrder
         val next = if (order.isEmpty()) list.sortedBy { it.label.lowercase() }
@@ -200,12 +205,43 @@ class HomeRepositoryImpl(
         store.writeNow(_snapshot.value)
     }
 
+    /**
+     * Removal is undoable for [UNDO_MS]: the card is hidden at once (in memory) and the real
+     * delete happens only when the undo window closes. A crash in between brings the card back,
+     * never loses one by accident.
+     */
+    private val pendingRemoval = java.util.concurrent.ConcurrentHashMap<String, ContinueItem>()
+    @Volatile private var lastRemoved: ContinueItem? = null
+    private var commitJob: kotlinx.coroutines.Job? = null
+
     override fun removeFromUpNext(item: ContinueItem) {
+        lastRemoved?.let { prev -> if (prev.key != item.key) commitRemoval(prev) }
+        pendingRemoval[item.key] = item
+        lastRemoved = item
+        commitJob?.cancel()
+        commitJob = scope.launch {
+            delay(UNDO_MS)
+            lastRemoved?.let { commitRemoval(it) }
+            lastRemoved = null
+        }
+        scope.launch { refresh(RefreshReason.SETTINGS_CHANGED) }
+    }
+
+    override fun undoRemove(): Boolean {
+        val item = lastRemoved ?: return false
+        lastRemoved = null
+        commitJob?.cancel()
+        pendingRemoval.remove(item.key)
+        scope.launch { refresh(RefreshReason.SETTINGS_CHANGED) }
+        return true
+    }
+
+    private fun commitRemoval(item: ContinueItem) {
+        if (pendingRemoval.remove(item.key) == null) return
         if (item.source != ContinueSource.WATCHED) settings.update { it.copy(removedUpNext = (it.removedUpNext + item.key).takeLast(100)) }
         if (item.source == ContinueSource.HISTORY) scope.launch { dao.deleteHistory(item.key) }
         // Watched rows are deleted, not remembered as removed: watching the show again brings it back.
         if (item.source == ContinueSource.WATCHED) watched?.delete(item.key.removePrefix("w:"))
-        scope.launch { refresh(RefreshReason.SETTINGS_CHANGED) }
     }
 
     /**
@@ -219,11 +255,11 @@ class HomeRepositoryImpl(
         if (!usage.hasAccess()) return
         if (!habits.seeded) {
             val from = now - 30L * 86_400_000L
-            habits.seed(usage.launches(from, now).map { it.packageName to it.timeMillis })
+            habits.seed(usage.launches(from, now).map { Providers.resolve(it.packageName) to it.timeMillis })
             prefs.edit().putLong("ingested", now).apply()
         } else {
             val since = prefs.getLong("ingested", now - 86_400_000L)
-            for (l in usage.launches(since, now)) habits.ingest(l.packageName, l.timeMillis)
+            for (l in usage.launches(since, now)) habits.ingest(Providers.resolve(l.packageName), l.timeMillis)
             prefs.edit().putLong("ingested", now).apply()
         }
         habits.decay(now)
@@ -236,10 +272,9 @@ class HomeRepositoryImpl(
         val s = settings.settings.value
         val visible = apps.visible()
         val byPkg = visible.associateBy { it.id.packageName }
-        val ranked = habits.rank(visible.map { it.id.packageName }, s.pinned, now)
-            .mapNotNull { byPkg[it] }.take(6)
+        val ranked = stableRanking(visible, s.pinned, now, time).mapNotNull { byPkg[it] }.take(6)
 
-        val removed = s.removedUpNext.toHashSet()
+        val removed = s.removedUpNext.toHashSet().apply { addAll(pendingRemoval.keys) }
         val items = ArrayList<ContinueItem>(3)
         if (s.showUpNext) {
             when (val wn = watchNext.read()) {
@@ -258,23 +293,27 @@ class HomeRepositoryImpl(
                 // What was actually watched (media sessions) and titles opened from this launcher,
                 // newest first. Never bare apps: an app without a title is not something to continue.
                 val cands = ArrayList<Pair<Long, ContinueItem>>()
+                val history = dao.history(10)
                 for (w in watched?.recent(20).orEmpty()) {
                     if (w.finished) continue
-                    val item = fromWatched(w, byPkg, now) ?: continue
+                    val item = fromWatched(w, byPkg, now, history) ?: continue
                     if (item.key !in removed) cands += w.updatedAt to item
                 }
-                for (h in dao.history(10)) {
+                // Opening a title from Search is not watching it: only "Save for later" makes a card
+                // here. Opened titles name an app's later untitled playback instead (fromAppPlayback).
+                for (h in history) {
+                    if (!h.savedForLater) continue
                     if (h.key in removed || h.name.isBlank()) continue
                     val svc = Providers.byPackage(h.servicePackage)?.name ?: byPkg[h.servicePackage]?.label ?: h.servicePackage
                     cands += h.openedAt to ContinueItem(
                         key = h.key,
                         title = TitleRef(h.tmdbId, MediaType.valueOf(h.type), h.name),
-                        service = AppId(h.serviceComponent),
+                        service = Providers.resolve(h.servicePackage).let { p -> if (p == h.servicePackage) AppId(h.serviceComponent) else byPkg[p]?.id ?: AppId("$p/") },
                         serviceName = svc,
                         name = h.name,
                         meta = if (h.savedForLater) "$svc · Saved for later" else "$svc · ${ago(now - h.openedAt)}",
                         progress = null,
-                        artKey = h.art ?: "banner:${h.servicePackage}",
+                        artKey = h.art ?: "banner:${Providers.resolve(h.servicePackage)}",
                         source = ContinueSource.HISTORY,
                     )
                 }
@@ -301,11 +340,32 @@ class HomeRepositoryImpl(
         )
     }
 
+    private var rankKey: String? = null
+    private var rankOrder: List<String> = emptyList()
+
+    /**
+     * Home's app order changes only when the hour (of the week) changes, or apps / pins change:
+     * never because an app was just opened. Launches still update the habit scores, which show
+     * from the next hour on. Aliases (the old JioCinema stub when JioHotstar is installed) are left out.
+     */
+    private fun stableRanking(visible: List<AppEntry>, pinned: List<String>, now: Long, time: LocalTime): List<String> {
+        val pkgs = visible.map { it.id.packageName }.filter { Providers.resolve(it) == it }
+        val day = java.time.LocalDate.now().dayOfWeek.value
+        val key = "$day/${time.hour}|" + pinned.joinToString(",") + "|" + pkgs.sorted().hashCode()
+        if (key != rankKey) {
+            rankOrder = habits.rank(pkgs, pinned, now)
+            rankKey = key
+        }
+        return rankOrder
+    }
+
     /** "Crunchyroll · S1 E3 · 18 min left", "YouTube · 6 min left", "Netflix · 2 h ago". */
-    private fun fromWatched(w: WatchedRow, byPkg: Map<String, AppEntry>, now: Long): ContinueItem? {
+    private fun fromWatched(w0: WatchedRow, byPkg: Map<String, AppEntry>, now: Long, history: List<HistoryRow>): ContinueItem? {
+        // The old JioCinema stub plays nothing itself any more: its rows belong to JioHotstar.
+        val w = Providers.resolve(w0.pkg).let { p -> if (p != w0.pkg && byPkg[p] != null) w0.copy(pkg = p) else w0 }
         val app = byPkg[w.pkg] ?: return null
         val svc = Providers.byPackage(w.pkg)?.name ?: app.label
-        if (w.appOnly) return fromAppPlayback(w, app, svc, now)
+        if (w.appOnly) return fromAppPlayback(w, app, svc, now, history)
         val progress = if (w.durationMs > 0) (w.positionMs.toFloat() / w.durationMs).coerceIn(0f, 1f) else null
         val left = if (w.durationMs > 0) ((w.durationMs - w.positionMs) / 60_000L).toInt().coerceAtLeast(1) else null
         val se = when {
@@ -317,7 +377,9 @@ class HomeRepositoryImpl(
         return ContinueItem(
             key = "w:" + w.key, title = WatchedStore.ref(w), service = app.id, serviceName = svc,
             name = w.show, meta = meta, progress = progress?.takeIf { it > 0f },
-            artKey = w.art ?: w.tmdbArt ?: "banner:" + w.pkg, source = ContinueSource.WATCHED,
+            // YouTube: the video's own 16:9 thumbnail (found by id) beats the session's small bitmap.
+            artKey = (if (w.pkg == WatchedStore.YOUTUBE) w.tmdbArt ?: w.art else w.art ?: w.tmdbArt) ?: "banner:" + w.pkg,
+            source = ContinueSource.WATCHED,
             intentUri = WatchedStore.PREFIX + w.key, season = w.season, episode = w.episode, minutesLeft = left,
             subtitle = w.episodeTitle,
         )
@@ -328,20 +390,35 @@ class HomeRepositoryImpl(
      * name: "Netflix" · "23 min left" with a bar when the app's numbers are sane, else
      * "Netflix" · "Watched 2 h ago". OK goes straight back into the app.
      */
-    private fun fromAppPlayback(w: WatchedRow, app: AppEntry, svc: String, now: Long): ContinueItem {
+    private fun fromAppPlayback(w: WatchedRow, app: AppEntry, svc: String, now: Long, history: List<HistoryRow>): ContinueItem {
         val known = w.durationMs > 0 && w.positionMs in 1 until w.durationMs
         val progress = if (known) w.positionMs.toFloat() / w.durationMs else null
         val left = if (known) ((w.durationMs - w.positionMs) / 60_000L).toInt().coerceAtLeast(1) else null
         val meta = left?.let { "${duration(it)} left" } ?: "Watched ${ago(now - w.updatedAt)}"
+        // The app says nothing about what played, but if a title was opened in it from Search just
+        // before, that is what is playing: "Panchayat · Prime Video" with the show's art.
+        val opened = openedBefore(w, history)
         return ContinueItem(
-            key = "w:" + w.key, title = null, service = app.id, serviceName = svc,
-            name = svc, meta = meta, progress = progress,
-            artKey = "banner:" + w.pkg, source = ContinueSource.WATCHED,
+            key = "w:" + w.key, title = opened?.let { TitleRef(it.tmdbId, MediaType.valueOf(it.type), it.name) },
+            service = app.id, serviceName = svc,
+            name = opened?.name ?: svc, meta = opened?.let { "$svc · $meta" } ?: meta, progress = progress,
+            artKey = opened?.art ?: ("banner:" + w.pkg), source = ContinueSource.WATCHED,
             intentUri = WatchedStore.PREFIX + w.key, minutesLeft = left,
         )
     }
 
-    private fun fromWatchNext(r: WatchNextRow, byPkg: Map<String, AppEntry>): ContinueItem? {
+    /** The title last opened (from Search / a title page) in the same service shortly before [w] played. */
+    private fun openedBefore(w: WatchedRow, history: List<HistoryRow>): HistoryRow? {
+        val provider = Providers.byPackage(w.pkg)
+        return history.filter { h ->
+            !h.savedForLater && h.name.isNotBlank() &&
+                (h.servicePackage == w.pkg || (provider != null && Providers.byPackage(h.servicePackage) == provider)) &&
+                h.openedAt <= w.updatedAt && w.updatedAt - h.openedAt < OPENED_WINDOW_MS
+        }.maxByOrNull { it.openedAt }?.takeIf { runCatching { MediaType.valueOf(it.type) }.isSuccess }
+    }
+
+    private fun fromWatchNext(r0: WatchNextRow, byPkg: Map<String, AppEntry>): ContinueItem? {
+        val r = Providers.resolve(r0.packageName).let { p -> if (p != r0.packageName && byPkg[p] != null) r0.copy(packageName = p) else r0 }
         val app = byPkg[r.packageName] ?: return null
         val svc = Providers.byPackage(r.packageName)?.name ?: app.label
         val progress = if (r.durationMs > 0) (r.positionMs.toFloat() / r.durationMs).coerceIn(0f, 1f) else null
@@ -361,6 +438,11 @@ class HomeRepositoryImpl(
     }
 
     companion object {
+        /** How long a removed card can be brought back. */
+        const val UNDO_MS = 5_500L
+        /** An untitled playback this soon after a title was opened in the same app is that title. */
+        private const val OPENED_WINDOW_MS = 4 * 60 * 60_000L
+
         fun heroFor(it: ContinueItem): HeroInfo = it.hero()
 
         fun duration(min: Int): String = if (min >= 60) "${min / 60}h %02dm".format(min % 60) else "$min min"

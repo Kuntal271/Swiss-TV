@@ -60,7 +60,7 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     }
 
     val apps by lazy { AppsRepositoryImpl(packages, settings, scope) }
-    val watched by lazy { WatchedStore(context, scope, tmdb, launchAdapter) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
+    val watched by lazy { WatchedStore(context, scope, tmdb, launchAdapter, http) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
     val home by lazy { HomeRepositoryImpl(context, scope, settings, apps, habits, usage, watchNext, db.dao(), snapshots, watched) }
     private val wallpapersLazy = lazy { WallpaperSchedulerImpl(context, scope, settings) }
     val wallpapers by wallpapersLazy

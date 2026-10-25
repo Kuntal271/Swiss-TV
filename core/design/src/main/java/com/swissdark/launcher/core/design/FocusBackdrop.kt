@@ -45,9 +45,20 @@ const val FOCUS_BACKDROP_DEBOUNCE_MS = 250L
  * wherever it was), so quick D-pad moves never pop.
  */
 @Composable
-fun FocusBackdrop(wallpaper: PreparedWallpaper?, focusedArt: State<ImageBitmap?>, modifier: Modifier = Modifier) {
+fun FocusBackdrop(
+    wallpaper: PreparedWallpaper?,
+    focusedArt: State<ImageBitmap?>,
+    modifier: Modifier = Modifier,
+    /** Read [BackdropFade.art] in the draw phase to fade things with the art (the wallpaper caption). */
+    fade: BackdropFade = remember { BackdropFade() },
+    /**
+     * A light bottom shade always on, so small grey labels and the key hints keep their contrast
+     * over a bright wallpaper. The art's own (darker) shade takes over as the art fades in.
+     */
+    baseScrim: Float = 0f,
+) {
     val reduce = LocalReduceMotion.current
-    val layers = remember { FadeLayers() }
+    val layers = fade.layers
     LaunchedEffect(layers) {
         snapshotFlow { focusedArt.value }.distinctUntilChanged().collectLatest { target ->
             if (target === layers.cur.value) return@collectLatest
@@ -79,21 +90,31 @@ fun FocusBackdrop(wallpaper: PreparedWallpaper?, focusedArt: State<ImageBitmap?>
                 }
                 // Title art is brighter than our wallpapers: shade the left (clock, hero) and the
                 // bottom (rows, key hints) so text stays readable, fading with the art itself.
-                val art = if (layers.cur.value != null) t else layers.prevFrom * (1f - t)
+                val art = layers.art()
+                // One horizontal shade (left for the clock and hero, right for the apps block) and
+                // one bottom shade (rows, key hints; always at least [baseScrim]). Both rects are
+                // bounded to where they shade, to keep the GPU fill low while the art cross-fades.
                 if (art > 0f) {
                     drawRect(
                         androidx.compose.ui.graphics.Brush.horizontalGradient(
                             0f to Color.Black.copy(alpha = 0.72f * art),
-                            0.55f to Color.Black.copy(alpha = 0.25f * art),
-                            1f to Color.Transparent,
+                            0.55f to Color.Black.copy(alpha = 0.27f * art),
+                            0.75f to Color.Black.copy(alpha = 0.28f * art),
+                            1f to Color.Black.copy(alpha = 0.55f * art),
                         ),
                     )
+                }
+                val bottom = maxOf(baseScrim, 0.78f * art)
+                if (bottom > 0f) {
+                    val top = size.height * 0.45f
                     drawRect(
                         androidx.compose.ui.graphics.Brush.verticalGradient(
-                            0.45f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.78f * art),
-                            startY = 0f, endY = size.height,
+                            0f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = bottom),
+                            startY = top, endY = size.height,
                         ),
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, top),
+                        size = androidx.compose.ui.geometry.Size(size.width, size.height - top),
                     )
                 }
             },
@@ -101,12 +122,21 @@ fun FocusBackdrop(wallpaper: PreparedWallpaper?, focusedArt: State<ImageBitmap?>
     }
 }
 
-private class FadeLayers {
+/** The backdrop's fade, hoisted so other parts can fade with the art. */
+@androidx.compose.runtime.Stable
+class BackdropFade {
+    internal val layers = FadeLayers()
+    /** 0 = wallpaper only … 1 = title art fully shown. Snapshot state: read it in the draw phase. */
+    fun art(): Float = layers.art()
+}
+
+internal class FadeLayers {
     val prev: MutableState<ImageBitmap?> = mutableStateOf(null)
     val cur: MutableState<ImageBitmap?> = mutableStateOf(null)
     var prevFrom = 0f
     val t = Animatable(1f)
     fun prevAlphaNow(): Float = if (prev.value == null) 0f else prevFrom * (1f - t.value)
+    fun art(): Float = if (cur.value != null) t.value else prevFrom * (1f - t.value)
 }
 
 /**

@@ -151,4 +151,28 @@ class TitleSourcesParseTest {
         assertEquals("omdb-poster", out.first().posterUrl) // TVmaze had none: OMDb's fills in
         assertEquals("Series · Hindi", out.first().meta)
     }
+
+    @Test fun merge_foldsSameTitleUnderAnotherId_andDropsArtlessNoise() {
+        val aarya = TitleRef(TitleIds.fromImdb("tt12448030")!!, MediaType.TV, "Aarya")
+        val maze = listOf(SearchHit.Title(aarya, "maze-poster", null, "Series · Hindi", null, false) to 0.9)
+        val omdb = listOf(
+            SearchHit.Title(aarya, "omdb-poster", null, "Series · 2020", null, false),
+            SearchHit.Title(TitleRef(TitleIds.fromImdb("tt99999999")!!, MediaType.TV, "Aarya"), "person-photo", null, "Series · 2020", null, false),
+            SearchHit.Title(TitleRef(TitleIds.fromImdb("tt0977636")!!, MediaType.MOVIE, "Aarya"), "film", null, "Film · 2007", null, false),
+            SearchHit.Title(TitleRef(TitleIds.fromImdb("tt1111111")!!, MediaType.MOVIE, "Unrelated"), null, null, "Film · 1990", null, false),
+        )
+        val out = TitleSources.merge("aarya", maze, omdb, mapOf(maze[0].first.key to 2020))
+        assertEquals(listOf("maze-poster", "film"), out.map { it.posterUrl })
+    }
+
+    @Test fun kids_strict() {
+        fun show(type: String, vararg g: String) = Json.parseToJsonElement(
+            """{"id":1,"name":"x","type":"$type","genres":[${g.joinToString(",") { "\"$it\"" }}]}""",
+        ).jsonObject
+        assertTrue(TvMazeParse.kids(show("Animation", "Children")))
+        assertTrue(TvMazeParse.kids(show("Scripted", "Comedy", "Family")))
+        assertTrue(!TvMazeParse.kids(show("Reality", "Family")))
+        assertTrue(!TvMazeParse.kids(show("Scripted", "Drama", "Family")))
+        assertTrue(!TvMazeParse.kids(show("Scripted", "Crime", "Family")))
+    }
 }

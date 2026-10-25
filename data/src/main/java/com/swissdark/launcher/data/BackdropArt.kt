@@ -99,8 +99,10 @@ class BackdropArt(
             val bmp = bytes?.let { withContext(io) { render(ImageDecoder.createSource(ByteBuffer.wrap(it)), kind, d) } }
             if (bmp != null) return PreparedBackdrop(ck, bmp, kind)
         }
-        // Fallback: the card's own image as a colour wash.
+        // Fallback: the card's own image. Sharp when it is a real 16:9 picture (a YouTube
+        // thumbnail, a still), a colour wash only for small or logo art.
         val cardBytes = item.artKey.takeIf { it.startsWith("http") }?.let { runCatching { fetchBytes(it) }.getOrNull() }
+        withContext(io) { sharpFromCard(item, cardBytes, d) }?.let { return PreparedBackdrop(ck, it, PreparedBackdrop.Kind.BACKGROUND) }
         val wash = withContext(io) { washFromCard(item, cardBytes, d) } ?: return null
         return PreparedBackdrop(ck, wash, PreparedBackdrop.Kind.WASH)
     }
@@ -211,6 +213,28 @@ class BackdropArt(
         }
     }
 
+    /** The card's own image as a sharp backdrop, when it is at least 480 px wide and about 16:9. */
+    private fun sharpFromCard(item: ContinueItem, httpBytes: ByteArray?, d: Float): Bitmap? {
+        val a = item.artKey
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val path = when {
+            a.startsWith("file:") -> Uri.parse(a).path
+            a.startsWith("/") -> a
+            else -> null
+        }
+        when {
+            httpBytes != null -> android.graphics.BitmapFactory.decodeByteArray(httpBytes, 0, httpBytes.size, opts)
+            path != null -> android.graphics.BitmapFactory.decodeFile(path, opts)
+            else -> return null
+        }
+        val w = opts.outWidth; val h = opts.outHeight
+        if (!BackdropMatch.sharpWorthy(w, h)) return null
+        val src = if (httpBytes != null) ImageDecoder.createSource(ByteBuffer.wrap(httpBytes)) else ImageDecoder.createSource(File(path!!))
+        val big = w >= 1280
+        val sw = decodeCover(src, if (big) FULL_W else SMALL_W, if (big) FULL_H else SMALL_H) ?: return null
+        return finish(sw, d)
+    }
+
     private fun washFromCard(item: ContinueItem, httpBytes: ByteArray?, d: Float): Bitmap? {
         val a = item.artKey
         val src: Bitmap? = when {
@@ -262,7 +286,15 @@ class BackdropArt(
         tiny.setPixels(px, 0, WASH_W, 0, 0, WASH_W, WASH_H)
         val up = Bitmap.createScaledBitmap(tiny, SMALL_W, SMALL_H, true)
         if (up !== tiny) tiny.recycle()
-        return finish(if (up.isMutable) up else up.copy(Bitmap.Config.ARGB_8888, true).also { up.recycle() }, d)
+        val m = if (up.isMutable) up else up.copy(Bitmap.Config.ARGB_8888, true).also { up.recycle() }
+        // Blurring greys colours out: give the saturation back, and darken less than a photo
+        // (FocusBackdrop's scrims keep the text readable): a wash, not mud.
+        val sat = Bitmap.createBitmap(m.width, m.height, Bitmap.Config.ARGB_8888)
+        Canvas(sat).drawBitmap(m, 0f, 0f, Paint().apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(WASH_SATURATION) })
+        })
+        m.recycle()
+        return finish(sat, d * WASH_DIM)
     }
 
     private fun finish(sw: Bitmap, d: Float): Bitmap {
@@ -306,6 +338,8 @@ class BackdropArt(
         private const val WASH_W = 192
         private const val WASH_H = 108
         private const val MIN_DIM = 0.62f
+        private const val WASH_DIM = 0.7f
+        private const val WASH_SATURATION = 1.35f
         private const val MISS_TTL_MS = 24 * 60 * 60_000L
     }
 }
@@ -319,7 +353,8 @@ object BackdropMatch {
     /** App-only cards (Netflix, Prime… with no title) have nothing to look up. */
     fun lookupWorthy(item: ContinueItem): Boolean {
         if (item.source == ContinueSource.APP) return false
-        if (item.key.endsWith("|@app")) return false
+        // Untitled app playback, unless it was named after a title opened just before ("Panchayat · Prime Video").
+        if (item.key.endsWith("|@app") && item.title == null) return false
         if (item.title == null && item.intentUri == null && item.source != ContinueSource.WATCHED) return false
         if (item.service.packageName == YOUTUBE) return false    // videos, not shows
         return norm(item.name).length >= 2
@@ -405,6 +440,9 @@ object BackdropMatch {
             .filter { norm(it.str("Title").orEmpty()) == q }
             .mapNotNull { it.str("imdbID") }
     }
+
+    /** A picture worth showing sharp full-screen: ≥ 480 px wide and roughly 16:9 (not a logo, not a poster). */
+    fun sharpWorthy(w: Int, h: Int): Boolean = w >= 480 && h > 0 && (w.toFloat() / h) in 1.55f..1.95f
 
     /** One horizontal + vertical box-blur pass, in place, ARGB. */
     fun boxBlur(px: IntArray, w: Int, h: Int, r: Int) {

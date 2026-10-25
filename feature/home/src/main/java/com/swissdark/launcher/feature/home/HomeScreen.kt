@@ -59,6 +59,14 @@ import com.swissdark.launcher.domain.TimeSlot
 import com.swissdark.launcher.domain.hero
 import androidx.compose.foundation.layout.padding
 import com.swissdark.launcher.domain.ContinueSource
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.swissdark.launcher.core.design.BackdropFade
+import com.swissdark.launcher.core.design.TabText
+import com.swissdark.launcher.core.design.drawPop
 
 @Immutable
 class HomeActions(
@@ -71,6 +79,8 @@ class HomeActions(
     val inputs: () -> Unit,
     val quickSettings: () -> Unit,
     val launcherSettings: () -> Unit = quickSettings,
+    /** The card's title page (Resume / Remove / next episodes): the hold-OK menu's "Details". */
+    val details: (ContinueItem) -> Unit = {},
 )
 
 @Immutable
@@ -82,8 +92,16 @@ private val links = listOf("search" to "Search", "grid" to "All apps", "monitor"
 /** Two rows of three, by habit. */
 private const val APP_COLS = 3
 private const val APP_ROWS = 2
-/** Tile width: three 16:9 tiles fit span 6 and two rows fit under the clock and hero. */
-private val APP_TILE_W = 212.dp
+/**
+ * The apps block spans the grid's last five columns exactly (right edge on the margin), three
+ * tiles with gutter gaps. span(6) tiles would push two rows' height past the clock and hero.
+ */
+private val APP_BLOCK_W = Swiss.span(5)
+private val APP_TILE_W = (APP_BLOCK_W - Swiss.GUTTER.dp * (APP_COLS - 1)) / APP_COLS
+/** Small band labels: a step brighter than Muted so they hold up over bright wallpapers. */
+private val BandLabel = androidx.compose.ui.graphics.Color(0xFFB4B4BA)
+/** The system TV Settings app: Home's own Settings button covers it; All apps still lists it. */
+private const val SYSTEM_SETTINGS = "com.android.tv.settings"
 
 /**
  * Home. One screen for all four times of day: only the wallpaper and the habit ranking change.
@@ -93,13 +111,18 @@ private val APP_TILE_W = 212.dp
 @Composable
 fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean, entrance: Int = 0, backdropArt: (suspend (ContinueItem) -> android.graphics.Bitmap?)? = null) {
     val up = snapshot.upNext
-    val apps = snapshot.apps.take(APP_COLS * APP_ROWS)
+    val apps = remember(snapshot.apps) {
+        snapshot.apps.filter { it.pinned || it.id.packageName != SYSTEM_SETTINGS }.take(APP_COLS * APP_ROWS)
+    }
     val nUp = up.size
     val nApps = apps.size
     val navBase = nUp + nApps
     val count = navBase + links.size
-    val focus = rememberFocusScreen(count, initial = 0, active = active)
+    // Hold OK on a card: Resume · Details · Remove, in the key-hint bar's place.
+    var menuFor by remember { mutableStateOf<ContinueItem?>(null) }
+    val focus = rememberFocusScreen(count, initial = 0, active = active && menuFor == null)
     val now by rememberMinute()
+    if (!active && menuFor != null) menuFor = null
 
     focus.onClick = { i ->
         when {
@@ -115,7 +138,7 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     }
     focus.onLongClick = { i ->
         when {
-            i < nUp -> actions.removeItem(up[i])
+            i < nUp -> menuFor = up[i]
             i < nUp + nApps -> actions.pinApp(apps[i - nUp])
         }
     }
@@ -123,7 +146,22 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     // A new snapshot never moves focus out from under the user: it follows the item's id.
     val keys = remember(up, apps) { up.map { it.key } + apps.map { it.id.component } + links.map { it.second } }
     val lastKey = remember { arrayOfNulls<String>(1) }
-    focus.onFocusChanged = { lastKey[0] = keys.getOrNull(it) }
+    // Focus memory: the last card or app focused, so DOWN from the nav returns to it.
+    val lastBand = remember { arrayOfNulls<String>(1) }
+    focus.onFocusChanged = {
+        lastKey[0] = keys.getOrNull(it)
+        if (it < navBase) lastBand[0] = lastKey[0]
+    }
+    focus.redirect = { from, to, dir ->
+        when {
+            // DOWN from a card never jumps diagonally into the apps grid.
+            dir == DpadKey.DOWN && from < nUp && to >= nUp -> from
+            // Nav → band: back to the item you came up from.
+            dir == DpadKey.DOWN && from >= navBase && to < navBase ->
+                keys.indexOf(lastBand[0]).takeIf { it in 0 until navBase } ?: to
+            else -> to
+        }
+    }
     LaunchedEffect(keys) {
         val idx = keys.indexOf(lastKey[0])
         if (idx >= 0 && idx != focus.focused) focus.focus(idx)
@@ -136,7 +174,15 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     val menuHeld = remember { BooleanArray(1) }
     focus.onOtherKey = { e ->
         if (e.action == KeyEvent.ACTION_DOWN) when (e.keyCode) {
-            KeyEvent.KEYCODE_BACK -> true
+            KeyEvent.KEYCODE_BACK -> {
+                // On the press, not the release: a release whose press went to the app we just
+                // left (or that lands mid-entrance) is never needed, and never double-counted.
+                if (e.repeatCount == 0) {
+                    val first = if (navBase > 0) 0 else navBase
+                    focus.focus(if (focus.focused == first) navBase else first, animate = true)
+                }
+                true
+            }
             KeyEvent.KEYCODE_MENU -> {
                 if (e.repeatCount == 0) menuHeld[0] = false
                 else if (!menuHeld[0] && (e.isLongPress || e.eventTime - e.downTime > 500)) {
@@ -157,13 +203,9 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                 true
             }
             KeyEvent.KEYCODE_SETTINGS -> { actions.quickSettings(); true }
-            KeyEvent.KEYCODE_BACK -> {
-                // Home is the bottom of the stack. Back goes to the first card (or app), and
-                // from there to Search.
-                val first = if (navBase > 0) 0 else navBase
-                focus.focus(if (focus.focused == first) navBase else first, animate = true)
-                true
-            }
+            // Home is the bottom of the stack: Back (handled on the press above) goes to the first
+            // card (or app), and from there to Search.
+            KeyEvent.KEYCODE_BACK -> true
             else -> false
         }
     }
@@ -185,14 +227,18 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     val g3 = remember { group(enter, 3) }
     val g4 = remember { group(enter, 4) }
 
+    val fade = remember { BackdropFade() }
     Box(Modifier.fillMaxSize()) {
         // Focus backdrop: the focused Continue watching card's art over the wallpaper (indices < nUp).
-        com.swissdark.launcher.core.design.FocusBackdrop(wallpaper, com.swissdark.launcher.core.design.rememberFocusedArt(focus.engine.focused, up, backdropArt))
+        com.swissdark.launcher.core.design.FocusBackdrop(
+            wallpaper, com.swissdark.launcher.core.design.rememberFocusedArt(focus.engine.focused, up, backdropArt),
+            fade = fade, baseScrim = 0.45f,
+        )
         FocusRoot(focus, Swiss.Focus) {
             // The Frame's margins with tighter row gaps: header, clock + hero, the band, key hints.
             Column(
                 Modifier.fillMaxSize().padding(horizontal = Swiss.MARGIN_X.dp, vertical = Swiss.MARGIN_Y.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 Box(Modifier.enter(g0, dy = 0f, fromAlpha = FROM_ALPHA)) {
                     HomeHeader(focus, navBase, status)
@@ -205,21 +251,24 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                             CrossfadeText(now.format(Fmt.clock), SwissType.Clock, Modifier.alignByBaseline())
                             Label(now.format(Fmt.longDate), Modifier.alignByBaseline())
                         }
-                        Hero(focus.engine.focused, up, apps, status)
+                        Hero(focus.engine.focused, up, apps, status, now)
                     }
-                    Box(Modifier.fillMaxHeight().weight(1f), contentAlignment = Alignment.BottomEnd) {
-                        // The wallpaper's caption is wrong while a Continue watching card's art fills the background.
+                    Box(Modifier.fillMaxHeight().weight(1f).padding(bottom = 28.dp), contentAlignment = Alignment.BottomEnd) {
+                        // The wallpaper's caption is wrong while a card's art fills the background:
+                        // it fades out and back with the art itself (draw phase).
                         caption(wallpaper)?.let {
-                            T(it, SwissType.Meta, Modifier.graphicsLayer { alpha = if (focus.engine.focused.intValue < up.size) 0f else 1f }, maxLines = 1)
+                            T(it, SwissType.Meta, Modifier.graphicsLayer { alpha = 1f - fade.art() }, maxLines = 1)
                         }
                     }
                 }
                 // One band, both labels on one line: Continue watching left, apps by habit right.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp), verticalAlignment = Alignment.Top) {
-                    Column(Modifier.width(Swiss.span(6)).enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    // 20 between label and items: the focus ring (6 + 4 px out, 1.04 scale) clears the label.
+                    Column(Modifier.width(Swiss.span(6)).enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         if (nUp > 0) {
-                            Label("Continue watching")
-                            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            Label("Continue watching", color = BandLabel)
+                            // Cards on the grid: span(2) each, gutter gaps.
+                            Row(horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                                 for ((i, item) in up.withIndex()) {
                                     PosterCard(
                                         focus, i, item.artKey, 146.dp, item.name, null,
@@ -233,15 +282,18 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                     // Right-aligned: the grid's right edge sits on the right margin, under the nav.
                     Column(
                         Modifier.weight(1f).enter(g3, dy = 0f, fromAlpha = FROM_ALPHA),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
                         horizontalAlignment = Alignment.End,
                     ) {
-                        Label("Apps · by habit at %02d:00".format(snapshot.habitHour), Modifier.width(APP_TILE_W * APP_COLS + 24.dp * (APP_COLS - 1)))
+                        // The hour ticks with the clock (the ranking refreshes on its own schedule).
+                        Label("Apps · by habit at %02d:00".format(now.hour), Modifier.width(APP_BLOCK_W), color = BandLabel)
                         AppsGrid(focus, apps, nUp)
                     }
                 }
                 Box(Modifier.enter(g4, dy = 0f, fromAlpha = FROM_ALPHA)) {
                     HintBar(focus, status.hint.isNotEmpty(), up, apps)
+                    val m = menuFor
+                    if (m != null) CardMenu(m, actions, active, Modifier.matchParentSize()) { menuFor = null }
                 }
             }
         }
@@ -256,7 +308,9 @@ private fun HomeHeader(focus: FocusScreenState, base: Int, status: HomeStatus) {
         HSpace(16.dp)
         Glyph(networkGlyph(status.network), 30.dp, Swiss.Muted)
         Box(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Shifted right by the chip's own padding: the last label ends on the right margin and
+        // its focus fill reaches 26 px into the margin.
+        Row(Modifier.offset(x = 26.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((k, l) in links.withIndex()) NavChip(focus, base + k, l.first, l.second)
         }
     }
@@ -280,10 +334,20 @@ private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
 }
 
 @Composable
-private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, apps: List<AppEntry>, status: HomeStatus) {
+private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, apps: List<AppEntry>, status: HomeStatus, now: java.time.LocalDateTime) {
+    // "12 min ago" was true when the snapshot was built: age it on the clock's minute tick.
+    val builtAt = remember(up) { System.currentTimeMillis() }
     // Derived: a press recomposes the hero only when it lands on a different card. With nothing
     // to continue, it names the focused app instead (the first one while focus is in the nav).
-    val heroIndex by remember(up) { derivedStateOf { val i = focused.intValue; if (i < up.size) i else if (up.isNotEmpty()) 0 else i } }
+    // Focus on the apps or the nav keeps the last card (or app) in the hero: it never jumps back.
+    val lastShown = remember(up, apps) { intArrayOf(0) }
+    val heroIndex by remember(up, apps) {
+        derivedStateOf {
+            val i = focused.intValue
+            val n = if (up.isNotEmpty()) up.size else apps.size
+            if (i < n) { lastShown[0] = i; i } else lastShown[0].coerceAtMost((n - 1).coerceAtLeast(0))
+        }
+    }
     val item = up.getOrNull(heroIndex)
     val app = if (up.isEmpty()) apps.getOrNull(heroIndex) ?: apps.firstOrNull() else null
     // New card under focus: the hero text fades up from 20 % and slides 12 px in from the right.
@@ -307,7 +371,8 @@ private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueIt
             val h = item.hero()
             Label(h.label, color = Swiss.Ink)
             T(h.title, SwissType.Hero, maxLines = 1)
-            T(h.meta, SwissType.Meta, maxLines = 1)
+            val meta = remember(h.meta, now) { aged(h.meta, ((System.currentTimeMillis() - builtAt) / 60_000L).toInt()) }
+            T(meta, SwissType.Meta, maxLines = 1)
             if (h.progress != null) ProgressBar(h.progress!!, Swiss.Ink)
         } else if (app != null) {
             Label("Apps · by habit", color = Swiss.Ink)
@@ -322,7 +387,7 @@ private fun AppsGrid(focus: FocusScreenState, apps: List<AppEntry>, base: Int) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         for (row in 0 until APP_ROWS) {
             if (row * APP_COLS >= apps.size) break
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                 for (col in 0 until APP_COLS) {
                     val k = row * APP_COLS + col
                     val a = apps.getOrNull(k)
@@ -375,7 +440,7 @@ private fun hints(i: Int, up: List<ContinueItem>, apps: List<AppEntry>): List<Ke
     return when {
         i in 0 until nUp -> listOf(
             KeyHint("OK", if (up[i].isAppOnly() && !up[i].isAppPlayback()) "Open ${up[i].serviceName}" else "Resume"),
-            KeyHint("Hold OK", "Remove"),
+            KeyHint("Hold OK", "Options"),
             MenuHint,
         )
         i in nUp until nUp + apps.size -> listOf(
@@ -394,3 +459,61 @@ private fun hints(i: Int, up: List<ContinueItem>, apps: List<AppEntry>): List<Ke
  * Matches WatchedStore's "<package>|@app" rows.
  */
 fun ContinueItem.isAppPlayback(): Boolean = source == ContinueSource.WATCHED && title == null && key.endsWith("|@app")
+
+/**
+ * Hold OK on a card: Resume · Details · Remove over the key-hint bar (same height, so nothing
+ * moves). Back or Cancel closes it. It has its own focus screen on top of Home's.
+ */
+@Composable
+private fun CardMenu(item: ContinueItem, actions: HomeActions, active: Boolean, modifier: Modifier, close: () -> Unit) {
+    val menu = rememberFocusScreen(4, active = active)
+    menu.onClick = { i ->
+        close()
+        when (i) {
+            0 -> actions.openItem(item)
+            1 -> actions.details(item)
+            2 -> actions.removeItem(item)
+        }
+    }
+    menu.onOtherKey = { e ->
+        if (e.keyCode == KeyEvent.KEYCODE_BACK || e.keyCode == KeyEvent.KEYCODE_MENU) {
+            if (e.action == KeyEvent.ACTION_UP) close()
+            true
+        } else false
+    }
+    val pop = com.swissdark.launcher.core.design.rememberAppear(item.key, Motion.SHORT)
+    FocusRoot(menu, Swiss.Focus, modifier) {
+        Row(
+            Modifier.fillMaxSize().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(start = 24.dp, end = 12.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(32.dp),
+        ) {
+            Label(item.name, Modifier.weight(1f), color = Swiss.Ink)
+            val resume = if (item.isAppOnly() && !item.isAppPlayback()) "Open ${item.serviceName}" else "Resume"
+            Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 0, resume, false, SwissType.Row28, Swiss.Ink, marker = false) }
+            Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 1, "Details", false, SwissType.Row28, Swiss.Ink, marker = false) }
+            Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 2, "Remove", false, SwissType.Row28, Swiss.Ink, marker = false) }
+            Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false) }
+        }
+    }
+}
+
+private val AgoRx = Regex("""just now|(\d+) min ago|(\d+) h ago""")
+
+/** [meta] with its relative time moved on by [elapsedMin] minutes (same wording as the data layer). */
+internal fun aged(meta: String, elapsedMin: Int): String {
+    if (elapsedMin <= 0) return meta
+    val m = AgoRx.find(meta) ?: return meta
+    val m0 = when {
+        m.value == "just now" -> 1
+        m.groupValues[1].isNotEmpty() -> m.groupValues[1].toInt()
+        else -> m.groupValues[2].toInt() * 60
+    }
+    val t = m0 + elapsedMin
+    val text = when {
+        t < 2 -> "just now"
+        t < 60 -> "$t min ago"
+        t < 48 * 60 -> "${t / 60} h ago"
+        else -> "${t / (24 * 60)} days ago"
+    }
+    return meta.replaceRange(m.range, text)
+}
