@@ -8,8 +8,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
-/** Tabler Icons (MIT), outline, 24 grid, 1.75 stroke. Paths copied from the design. */
+/** Tabler Icons (MIT), outline, 24 grid, drawn with a 2.25 stroke so they hold up at 3 m. */
 object Glyphs {
+    /** Default on-screen size of a UI glyph. */
+    val SIZE = 34.dp
+    private const val STROKE = 2.25f
+
     private val paths: Map<String, Array<String>> = mapOf(
         "netflix" to arrayOf("M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12", "M8 4l0 16", "M16 4l0 16", "M4 8l4 0", "M4 16l4 0", "M4 12l16 0", "M16 8l4 0", "M16 16l4 0"),
         "youtube" to arrayOf("M7 4v16l13 -8l-13 -8"),
@@ -40,6 +44,12 @@ object Glyphs {
         "mic" to arrayOf("M9 5a3 3 0 0 1 3 -3a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3a3 3 0 0 1 -3 -3z", "M5 10a7 7 0 0 0 14 0", "M8 21l8 0", "M12 17l0 4"),
         "dashboard" to arrayOf("M5 4h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1", "M5 16h4a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1", "M15 12h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1", "M15 4h4a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1"),
         "search" to arrayOf("M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0", "M21 21l-6 -6"),
+        "grid" to arrayOf("M4 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z", "M14 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z", "M4 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z", "M14 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"),
+        "monitor" to arrayOf("M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z", "M7 20h10", "M9 16v4", "M15 16v4"),
+        "adjustments" to arrayOf("M12 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M4 6l8 0", "M16 6l4 0", "M6 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M4 12l2 0", "M10 12l10 0", "M15 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0", "M4 18l11 0", "M19 18l1 0"),
+        "wifi" to arrayOf("M12 18l.01 0", "M9.172 15.172a4 4 0 0 1 5.656 0", "M6.343 12.343a8 8 0 0 1 11.314 0", "M3.515 9.515c4.686 -4.687 12.284 -4.687 17 0"),
+        "wifi_off" to arrayOf("M12 18l.01 0", "M9.172 15.172a4 4 0 0 1 5.656 0", "M6.343 12.343a7.963 7.963 0 0 1 3.864 -2.14m4.163 .155a7.965 7.965 0 0 1 3.287 2", "M3.515 9.515a12 12 0 0 1 3.544 -2.455m3.101 -.92a12 12 0 0 1 10.325 3.374", "M3 3l18 18"),
+        "ethernet" to arrayOf("M9 15l6 -6", "M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464", "M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463"),
     )
 
     private val cache = HashMap<String, ImageVector>()
@@ -53,7 +63,7 @@ object Glyphs {
                 pathData = addPathNodes(d),
                 fill = null,
                 stroke = SolidColor(Color.White),
-                strokeLineWidth = 1.75f,
+                strokeLineWidth = STROKE,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
             )

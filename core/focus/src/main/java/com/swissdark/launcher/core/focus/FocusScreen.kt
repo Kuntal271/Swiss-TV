@@ -54,6 +54,7 @@ class FocusScreenState internal constructor(
     private var styles = arrayOfNulls<FocusStyle>(count)
     private var scrolls = BooleanArray(count)
     private var scales = BooleanArray(count)
+    private var scaleTo = FloatArray(count)     // per-item focus scale; 0 = the screen's focusScale
     private var seen = BooleanArray(count)
     private var seenCount = 0
     private var dirty = true
@@ -95,6 +96,23 @@ class FocusScreenState internal constructor(
     /** Per-item scale that only notifies when this item's value changes. */
     fun scaleState(index: Int): State<Float> = derivedStateOf { scaleOf(index) }
 
+    /** The scale [i] grows to when focused (1 = it does not scale). */
+    private fun targetScale(i: Int): Float = if (!scales[i]) 1f else if (scaleTo[i] > 0f) scaleTo[i] else focusScale
+
+    /**
+     * 0..1, how focused [index] is: 1 when focused, 0 when not, and in between on the focus
+     * scale's own progress, so a fill or colour fades exactly with the scale. Draw phase only.
+     */
+    fun focusFraction(index: Int): Float {
+        if (index < 0 || index >= count) return 0f
+        val t = targetScale(index)
+        if (t == 1f) return if (engine.focused.intValue == index) 1f else 0f
+        return ((scaleOf(index) - 1f) / (t - 1f)).coerceIn(0f, 1f)
+    }
+
+    /** [focusFraction] as a state that only notifies when this item's value changes. */
+    fun fractionState(index: Int): State<Float> = derivedStateOf { focusFraction(index) }
+
     /** Vertical scroll of the scrolling region, applied at placement. */
     val scrollY = mutableFloatStateOf(0f)
     var viewportTop = 0f
@@ -129,6 +147,7 @@ class FocusScreenState internal constructor(
         styles = arrayOfNulls(newCount)
         scrolls = BooleanArray(newCount)
         scales = BooleanArray(newCount)
+        scaleTo = FloatArray(newCount)
         scaleCur.intValue = -1
         scalePrev.intValue = -1
         seen = BooleanArray(newCount)
@@ -138,13 +157,13 @@ class FocusScreenState internal constructor(
         engine.set(keepIndex.coerceIn(0, (newCount - 1).coerceAtLeast(0)))
     }
 
-    internal fun register(index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false) {
+    internal fun register(index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false, scaleAmount: Float = 0f) {
         if (index < 0 || index >= count) return
         val p = c.positionInRoot()
         val y = p.y + if (scrolling) scrollY.floatValue else 0f
         val o = index * 4
         val w = c.size.width.toFloat(); val h = c.size.height.toFloat()
-        var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || !seen[index]
+        var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || scaleTo[index] != scaleAmount || !seen[index]
         if (rects[o] != p.x || rects[o + 1] != y || rects[o + 2] != w || rects[o + 3] != h) {
             rects[o] = p.x; rects[o + 1] = y; rects[o + 2] = w; rects[o + 3] = h
             dirty = true
@@ -153,6 +172,7 @@ class FocusScreenState internal constructor(
         styles[index] = style
         scrolls[index] = scrolling
         scales[index] = scale
+        scaleTo[index] = scaleAmount
         if (!seen[index]) {
             seen[index] = true
             seenCount++
@@ -196,7 +216,7 @@ class FocusScreenState internal constructor(
     private fun ringTarget(i: Int) {
         val o = i * 4
         val dy = if (scrolls[i]) scrollY.floatValue else 0f
-        val s = if (scales[i]) focusScale else 1f
+        val s = targetScale(i)
         val w = rects[o + 2]; val h = rects[o + 3]
         val gx = w * (s - 1f) / 2f; val gy = h * (s - 1f) / 2f
         to[0] = rects[o] - gx; to[1] = rects[o + 1] - dy - gy; to[2] = w + 2 * gx; to[3] = h + 2 * gy
@@ -214,7 +234,7 @@ class FocusScreenState internal constructor(
         val sNew = scaleOf(i)
         prevFrom = if (old != i && old >= 0) scaleOf(old) else 1f
         curFrom = sNew
-        curTo = if (scales[i]) focusScale else 1f
+        curTo = targetScale(i)
         scalePrev.intValue = if (old != i) old else -1
         scaleCur.intValue = i
 
@@ -307,7 +327,7 @@ class FocusScreenState internal constructor(
         if (i < 0 || i >= count || !seen[i]) return
         val o = i * 4
         val dy = if (scrolls[i]) scrollY.floatValue else 0f
-        val s = if (scales[i]) focusScale else 1f
+        val s = targetScale(i)
         val w = rects[o + 2] * s; val h = rects[o + 3] * s
         LaunchOrigin.record(rects[o] - (w - rects[o + 2]) / 2f, rects[o + 1] - dy - (h - rects[o + 3]) / 2f, w, h)
     }
@@ -373,7 +393,9 @@ fun Modifier.focusItem(
     style: FocusStyle = FocusStyle.RING,
     scrolling: Boolean = false,
     scale: Boolean = false,
-): Modifier = onGloballyPositioned { state.register(index, it, style, scrolling, scale) }
+    /** The focused scale for this item; 0 = the screen's focusScale (1.04). */
+    scaleAmount: Float = 0f,
+): Modifier = onGloballyPositioned { state.register(index, it, style, scrolling, scale, scaleAmount) }
 
 /** The scrolling region: offset at placement, so a scroll never recomposes or measures. */
 fun Modifier.focusScroll(state: FocusScreenState): Modifier =
