@@ -143,7 +143,7 @@ fun AllAppsScreen(
                 T("All apps · ${apps.size}", SwissType.Row44, maxLines = 1)
                 Box(Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
                     // 12 px of air above the first row so its ring and scale are never clipped.
-                    Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                    Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                         for (r in 0 until (apps.size + COLS - 1) / COLS) {
                             Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                                 for (c in 0 until COLS) {
@@ -200,10 +200,13 @@ private fun AppsFooter(grid: com.swissdark.launcher.core.focus.FocusScreenState,
             focusedApp != null -> focusedApp.label
             else -> "No apps"
         },
-        listOf(
-            com.swissdark.launcher.core.design.KeyHint("OK", "Open"),
-            com.swissdark.launcher.core.design.KeyHint("Hold OK", "Pin · Hide · Move"),
-            com.swissdark.launcher.core.design.KeyHint("Back", "Home"),
-        ),
+        footerKeys,
     )
 }
+
+// Built once: a press recomposes the footer line, and must not allocate the key hints again.
+private val footerKeys = listOf(
+    com.swissdark.launcher.core.design.KeyHint("OK", "Open"),
+    com.swissdark.launcher.core.design.KeyHint("Hold OK", "Pin · Hide · Move"),
+    com.swissdark.launcher.core.design.KeyHint("Back", "Home"),
+)

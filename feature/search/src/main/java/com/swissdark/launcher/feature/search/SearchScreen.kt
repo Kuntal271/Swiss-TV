@@ -92,16 +92,20 @@ private val genres = listOf("Thriller", "Comedy", "Drama", "Crime", "Documentary
 private fun List<Availability>?.mine(): Availability? =
     this?.firstOrNull { it.inMyPlan && it.kind == Kind.STREAM } ?: this?.firstOrNull { it.kind == Kind.FREE || it.kind == Kind.ADS }
 
-private fun SearchHit.Title.serviceLine(): Pair<String, Boolean> {
+private fun SearchHit.Title.serviceLine(tmdbMode: Boolean = true): Pair<String, Boolean> {
     val a = availability ?: return "Checking where to watch…" to false
     val m = a.mine()
     if (m != null) return (when (m.kind) { Kind.FREE, Kind.ADS -> "Free"; else -> "Stream" } + " · " + m.providerName) to true
     val r = a.firstOrNull { it.kind == Kind.RENT } ?: a.firstOrNull { it.kind == Kind.BUY }
     if (r != null) return ((if (r.kind == Kind.RENT) "Rent" else "Buy") + " · " + r.providerName) to true
+    if (!tmdbMode) return (a.firstOrNull()?.let { "On " + it.providerName } ?: "Service not known") to false
     return "Not on your services" to false
 }
 
-/** Search: apps and history answer on every keystroke, TMDB once typing pauses. */
+/**
+ * Search: apps and history answer on every keystroke, online titles once typing pauses.
+ * Online titles come from TMDB, or from OMDb + TVmaze when there is no working TMDB key.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
@@ -118,7 +122,11 @@ fun SearchScreen(
     var browseHits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     var remote by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     var withAvail by remember { mutableStateOf<Map<String, SearchHit.Title>>(emptyMap()) }
-    var filter by remember { mutableStateOf(Filter.MINE) }
+    // Without TMDB, where-to-watch is only known for some series: start on Everything.
+    val source = engine.titleSource
+    val tmdbMode = source == "TMDB"
+    val credit = credits(source)
+    var filter by remember { mutableStateOf(if (tmdbMode) Filter.MINE else Filter.ALL) }
     var daily by remember { mutableStateOf(false) }
     var trending by remember { mutableStateOf<List<SearchHit.Title>>(emptyList()) }
     var listening by remember { mutableStateOf(false) }
@@ -168,7 +176,7 @@ fun SearchScreen(
         Filter.FREE -> allTitles.filter { a -> a.availability?.any { it.kind == Kind.FREE || it.kind == Kind.ADS } == true }
         Filter.KIDS -> allTitles.filter { it.kidsSafe }
     }.take(12)
-    val typingTitles = allTitles.filter { it.availability.mine() != null }.take(3)
+    val typingTitles = (if (tmdbMode) allTitles.filter { it.availability.mine() != null } else allTitles.sortedBy { it.availability.mine() == null }).take(3)
     val recentShown = recent.take(4)
     val trendShown = trending.take(5).map { resolved(it) }
 
@@ -211,7 +219,7 @@ fun SearchScreen(
                 k -= genres.size
                 if (k < 2) { daily = k == 1; return@click }
                 k -= 2
-                trendShown.getOrNull(k)?.let { actions.openTitle(it, "Trending · ${if (daily) "today" else "this week"}") }
+                trendShown.getOrNull(k)?.let { actions.openTitle(it, (if (tmdbMode) "Trending · " else "New episodes · ") + if (daily) "today" else "this week") }
             }
             1 -> {
                 if (k < appHits.size) { engine.remember(query, "App"); actions.launchApp(appHits[k]); return@click }
@@ -309,20 +317,20 @@ fun SearchScreen(
                 val bodyIn = rememberAppear(mode, Motion.MEDIUM, from = 0.25f)
                 Box(Modifier.fillMaxWidth().enter({ bodyIn.value }, dy = 0f)) {
                     when (mode) {
-                        0 -> StartBody(focus, recentShown, trendShown, daily, hasTmdb)
-                        1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb, hasTmdb)
-                        else -> ResultsBody(focus, filter, filtered, people, myServiceNames, browse != null && browseHits.isEmpty(), error)
+                        0 -> StartBody(focus, recentShown, trendShown, daily, tmdbMode)
+                        1 -> TypingBody(focus, appHits, typingTitles, remote.isEmpty() && hasTmdb, tmdbMode)
+                        else -> ResultsBody(focus, filter, filtered, people, myServiceNames, browse != null && browseHits.isEmpty(), error, tmdbMode)
                     }
                 }
                 Box(Modifier.weight(1f))
                 when (mode) {
                     0 -> Footer(
-                        if (hasTmdb) "Titles and artwork: TMDB · Where to watch: JustWatch" else "",
+                        credit,
                         listOf(KeyHint("Hold OK", "Remove recent"), KeyHint("Back", "Home")),
                     )
                     1 -> Footer("No ads, no services you don’t use", listOf(KeyHint("Hold mic", "Google Assistant"), KeyHint("Back", "Clear")))
                     else -> Footer(
-                        "Titles and artwork: TMDB · Where to watch: JustWatch",
+                        credit,
                         listOf(KeyHint("OK", "Open"), KeyHint("Back", "Clear")),
                     )
                 }
@@ -331,6 +339,11 @@ fun SearchScreen(
     }
 }
 
+/** Credit line for the footer: who supplied titles and where-to-watch. */
+private fun credits(source: String): String =
+    if (source == "TMDB") "Titles and artwork: TMDB · Where to watch: JustWatch"
+    else "Titles: $source · Where to watch: TVmaze channel (series only, approximate)"
+
 @Composable
 private fun MicLabel(focus: FocusScreenState, listening: Boolean) {
     NavChip(focus, 1, "mic", if (listening) "Mic on" else "Mic")
@@ -338,7 +351,7 @@ private fun MicLabel(focus: FocusScreenState, listening: Boolean) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, trending: List<SearchHit.Title>, daily: Boolean, hasTmdb: Boolean) {
+private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, trending: List<SearchHit.Title>, daily: Boolean, tmdbMode: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
         Column(Modifier.width(Swiss.span(4)), verticalArrangement = Arrangement.spacedBy(28.dp)) {
             // Sections without data are left out.
@@ -359,11 +372,11 @@ private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, t
             }
         }
         val base = 2 + recent.size + genres.size
-        // Trending appears once it has loaded; without TMDB it is simply not there.
+        // Trending (or, without TMDB, what is airing) appears once it has loaded; never an empty section.
         val shown = rememberAppear(trending.isNotEmpty(), Motion.MEDIUM)
-        if (hasTmdb && trending.isNotEmpty()) Column(Modifier.weight(1f).enter({ shown.value }, dy = 0f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (trending.isNotEmpty()) Column(Modifier.weight(1f).enter({ shown.value }, dy = 0f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Label("Trending worldwide", color = Swiss.Ink)
+                Label(if (tmdbMode) "Trending worldwide" else "New episodes", color = Swiss.Ink)
                 TabText(focus, base, "This week", !daily, SwissType.Tile)
                 TabText(focus, base + 1, "Today", daily, SwissType.Tile)
                 Box(Modifier.weight(1f))
@@ -371,7 +384,7 @@ private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, t
             }
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 for ((k, t) in trending.withIndex()) {
-                    val (line, mine) = t.serviceLine()
+                    val (line, mine) = t.serviceLine(tmdbMode)
                     PosterCard(
                         focus, base + 2 + k, t.posterUrl, 290.dp, t.ref.name, t.meta, Modifier.weight(1f),
                         titleStyle = SwissType.Card, metaStyle = SwissType.Meta, gap = 10.dp, decodeW = 228, decodeH = 342,
@@ -384,7 +397,7 @@ private fun StartBody(focus: FocusScreenState, recent: List<SearchHit.Recent>, t
 }
 
 @Composable
-private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: List<SearchHit.Title>, loading: Boolean, hasTmdb: Boolean) {
+private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: List<SearchHit.Title>, loading: Boolean, tmdbMode: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
         Column(Modifier.width(Swiss.span(4)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Label("Apps · ${apps.size}")
@@ -397,9 +410,9 @@ private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: Li
             }
         }
         Box(Modifier.width(Swiss.span(1)))
-        if (hasTmdb || titles.isNotEmpty()) Column(Modifier.weight(1f)) {
-            Label("Titles · only on services you pay for", Modifier.padding(bottom = 14.dp))
-            if (titles.isEmpty()) T(if (loading) "Looking…" else "Nothing on your services yet.", SwissType.Body)
+        if (titles.isNotEmpty() || loading) Column(Modifier.weight(1f)) {
+            Label(if (tmdbMode) "Titles · only on services you pay for" else "Titles · yours first", Modifier.padding(bottom = 14.dp))
+            if (titles.isEmpty()) T("Looking…", SwissType.Body)
             val arrived = rememberAppear(titles.isNotEmpty(), Motion.MEDIUM)
             Column(Modifier.enter({ arrived.value }, dy = 0f)) {
             for ((k, t) in titles.withIndex()) {
@@ -408,7 +421,7 @@ private fun TypingBody(focus: FocusScreenState, apps: List<AppEntry>, titles: Li
                     Box(Modifier.width(24.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         TDraw(t.ref.name, SwissType.Row36, c.ink, maxLines = 1)
-                        TDraw((t.availability.mine()?.providerName ?: "") + " · " + if (t.ref.type == MediaType.MOVIE) "Film" else "Series", SwissType.Meta, c.muted, maxLines = 1)
+                        TDraw(listOfNotNull(t.availability.mine()?.providerName, t.meta).joinToString(" · "), SwissType.Meta, c.muted, maxLines = 1)
                     }
                 }
             }
@@ -426,6 +439,7 @@ private fun ResultsBody(
     myServices: List<String>,
     loading: Boolean,
     error: String?,
+    tmdbMode: Boolean,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(36.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp)) {
@@ -445,7 +459,7 @@ private fun ResultsBody(
                             val k = r * 6 + c
                             val t = titles.getOrNull(k)
                             if (t == null) Box(Modifier.weight(1f)) else {
-                                val (line, mine) = t.serviceLine()
+                                val (line, mine) = t.serviceLine(tmdbMode)
                                 PosterCard(
                                     focus, 6 + k, t.posterUrl, 300.dp, t.ref.name, t.meta, Modifier.weight(1f),
                                     titleStyle = SwissType.Card, metaStyle = SwissType.Meta, gap = 10.dp,

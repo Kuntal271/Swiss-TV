@@ -54,7 +54,10 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
             .cache(okhttp3.Cache(File(context.cacheDir, "http"), 20L * 1024 * 1024))
             .build()
     }
-    val tmdb by lazy { TmdbClient(http) { settings.settings.value.tmdbKey.ifBlank { bakedTmdbKey } } }
+    /** Title provider chain: TMDB when its key works, else OMDb + TVmaze (see TitleSources). */
+    val tmdb by lazy {
+        TitleSources(context, http, { settings.settings.value.tmdbKey.ifBlank { bakedTmdbKey } }, { settings.settings.value.omdbKey })
+    }
 
     val apps by lazy { AppsRepositoryImpl(packages, settings, scope) }
     val watched by lazy { WatchedStore(context, scope, tmdb, launchAdapter) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }

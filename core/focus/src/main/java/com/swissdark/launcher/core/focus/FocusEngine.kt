@@ -42,7 +42,7 @@ class ArrayFocusEngine(initial: Int = 0) : FocusEngine {
     }
 
     override fun onKey(key: DpadKey, repeat: Boolean): Boolean {
-        Trace.beginSection(Sections.NAV_KEY)
+        Trace.beginSection(Sections.NAV_LOOKUP)
         val g = graph
         val cur = state.intValue
         val next = if (cur < 0 || cur >= g.n) -1 else when (key) {

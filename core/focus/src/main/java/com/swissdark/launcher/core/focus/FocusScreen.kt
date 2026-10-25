@@ -22,12 +22,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.node.GlobalPositionAwareModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.tracing.Trace
 import com.swissdark.launcher.core.perf.KeyLatency
+import com.swissdark.launcher.core.perf.Sections
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -56,7 +62,10 @@ class FocusScreenState internal constructor(
     private var scales = BooleanArray(count)
     private var scaleTo = FloatArray(count)     // per-item focus scale; 0 = the screen's focusScale
     private var seen = BooleanArray(count)
-    private var seenCount = 0
+    /** The live node that registered each index (an item that leaves composition clears only its own slot). */
+    private var owners = arrayOfNulls<Any>(count)
+    /** Every attached focus item, so a count change can re-register them without a remount. */
+    private val live = ArrayList<FocusItemNode>()
     private var dirty = true
 
     // Ring, in root px. Read only in the draw phase.
@@ -113,10 +122,16 @@ class FocusScreenState internal constructor(
     /** [focusFraction] as a state that only notifies when this item's value changes. */
     fun fractionState(index: Int): State<Float> = derivedStateOf { focusFraction(index) }
 
-    /** Vertical scroll of the scrolling region, applied at placement. */
+    /**
+     * Vertical scroll of the scrolling region. Applied as a canvas translation (draw phase only):
+     * a scroll never measures, places or re-registers anything, and the registered rects of
+     * scrolling items stay in unscrolled layout space.
+     */
     val scrollY = mutableFloatStateOf(0f)
     var viewportTop = 0f
     var viewportBottom = Float.MAX_VALUE
+    /** Bottom of the scrolling content (root px, unscrolled); the scroll never goes past it. */
+    var contentBottom = Float.MAX_VALUE
 
     var onClick: (Int) -> Unit = {}
     var onLongClick: (Int) -> Unit = {}
@@ -136,12 +151,13 @@ class FocusScreenState internal constructor(
 
     fun isFocused(index: Int): State<Boolean> = derivedStateOf { engine.focused.intValue == index }
 
-    /** Bumped when the item count changes; FocusRoot remounts its content so every item re-registers. */
-    val generation = androidx.compose.runtime.mutableIntStateOf(0)
-
+    /**
+     * New item count. Nothing is remounted: the arrays are rebuilt and every live item registers
+     * again from its last coordinates; items that leave composition clear their own slot, and new
+     * ones register on their first placement.
+     */
     fun resize(newCount: Int, keepIndex: Int) {
         if (newCount == count) return
-        generation.intValue++
         count = newCount
         rects = FloatArray(newCount * 4)
         styles = arrayOfNulls(newCount)
@@ -151,16 +167,34 @@ class FocusScreenState internal constructor(
         scaleCur.intValue = -1
         scalePrev.intValue = -1
         seen = BooleanArray(newCount)
-        seenCount = 0
+        owners = arrayOfNulls(newCount)
         dirty = true
         engine.bind(FocusGraph.EMPTY)
         engine.set(keepIndex.coerceIn(0, (newCount - 1).coerceAtLeast(0)))
+        for (k in live.indices) live[k].reRegister()
     }
 
-    internal fun register(index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false, scaleAmount: Float = 0f) {
-        if (index < 0 || index >= count) return
+    internal fun attach(node: FocusItemNode) {
+        if (!live.contains(node)) live.add(node)
+    }
+
+    /** [node] left composition (or moved to another index): clear its slot if it still owns it. */
+    internal fun unregister(node: FocusItemNode, index: Int, detach: Boolean) {
+        if (detach) live.remove(node)
+        if (index < 0 || index >= count || owners[index] !== node) return
+        owners[index] = null
+        val o = index * 4
+        rects[o] = 0f; rects[o + 1] = 0f; rects[o + 2] = 0f; rects[o + 3] = 0f
+        seen[index] = false
+        dirty = true
+    }
+
+    internal fun register(owner: Any?, index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false, scaleAmount: Float = 0f) {
+        if (index < 0 || index >= count || !c.isAttached) return
+        if (owner != null) owners[index] = owner
+        // Scrolling is a canvas translation, so layout positions are already unscrolled.
         val p = c.positionInRoot()
-        val y = p.y + if (scrolling) scrollY.floatValue else 0f
+        val y = p.y
         val o = index * 4
         val w = c.size.width.toFloat(); val h = c.size.height.toFloat()
         var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || scaleTo[index] != scaleAmount || !seen[index]
@@ -173,10 +207,7 @@ class FocusScreenState internal constructor(
         scrolls[index] = scrolling
         scales[index] = scale
         scaleTo[index] = scaleAmount
-        if (!seen[index]) {
-            seen[index] = true
-            seenCount++
-        }
+        seen[index] = true
         // Global layout passes (a scroll, the hero text reflowing) call this for every item.
         // Only a real move of the focused item touches the ring, and a running ring animation
         // is re-targeted rather than snapped.
@@ -205,11 +236,17 @@ class FocusScreenState internal constructor(
 
     private fun ensureVisible(i: Int) {
         if (!scrolls[i]) return
-        val top = rects[i * 4 + 1] - 24f
-        val bottom = rects[i * 4 + 1] + rects[i * 4 + 3] + 120f
+        val top = rects[i * 4 + 1] - EDGE
+        // Below the focused item keep a peek of the next row, but never scroll past the end of
+        // the content: the last row then sits EDGE above the viewport bottom, so its focus scale
+        // and ring are never clipped.
+        val itemBottom = rects[i * 4 + 1] + rects[i * 4 + 3]
+        val maxScroll = (maxOf(contentBottom.coerceAtMost(Float.MAX_VALUE / 2), itemBottom) + EDGE - viewportBottom).coerceAtLeast(0f)
+        val bottom = itemBottom + PEEK
         val s = scrollY.floatValue
-        if (bottom - s > viewportBottom) scrollY.floatValue = bottom - viewportBottom
+        if (bottom - s > viewportBottom) scrollY.floatValue = (bottom - viewportBottom).coerceAtMost(maxScroll)
         else if (top - s < viewportTop) scrollY.floatValue = (top - viewportTop).coerceAtLeast(0f)
+        else if (s > maxScroll) scrollY.floatValue = maxScroll
     }
 
     /** The ring's target for item [i]: its rect, grown by the focus scale when the item scales. */
@@ -285,20 +322,28 @@ class FocusScreenState internal constructor(
         if (dir != null) {
             if (e.action != KeyEvent.ACTION_DOWN) return true
             KeyLatency.onKey(e.eventTime)
-            ensureGraph()
-            val cur = engine.focused.intValue
-            val repeat = e.repeatCount > 0
-            if (engine.onKey(dir, repeat)) {
-                val next = engine.focused.intValue
-                ensureVisible(next)
-                // Held keys repeat ~every 50 ms: skip the ring animation so focus never lags.
-                placeRing(animate = !repeat)
-                onFocusChanged(next)
-            } else {
-                onEdge(cur, dir)
-            }
+            Trace.beginSection(Sections.NAV_DISPATCH)
+            try { move(dir, e.repeatCount > 0) } finally { Trace.endSection() }
             return true
         }
+        return handleOther(e)
+    }
+
+    private fun move(dir: DpadKey, repeat: Boolean) {
+        ensureGraph()
+        val cur = engine.focused.intValue
+        if (engine.onKey(dir, repeat)) {
+            val next = engine.focused.intValue
+            ensureVisible(next)
+            // Held keys repeat ~every 50 ms: skip the ring animation so focus never lags.
+            placeRing(animate = !repeat)
+            onFocusChanged(next)
+        } else {
+            onEdge(cur, dir)
+        }
+    }
+
+    private fun handleOther(e: KeyEvent): Boolean {
         when (e.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                 if (e.action == KeyEvent.ACTION_DOWN) {
@@ -346,6 +391,17 @@ class FocusScreenState internal constructor(
     }
 
     private var stroke = Stroke(width = 4f)
+
+    private companion object {
+        const val EDGE = 24f
+        const val PEEK = 120f
+    }
+}
+
+/** Counts Home-key presses that reach the launcher (onNewIntent); Home resets its focus on each. */
+object HomePress {
+    val count = mutableIntStateOf(0)
+    fun press() { count.intValue++ }
 }
 
 /** Keys go to the top-most registered screen (panels sit above the screen under them). */
@@ -379,7 +435,7 @@ fun rememberFocusScreen(count: Int, initial: Int = 0, active: Boolean = true): F
 @Composable
 fun FocusRoot(state: FocusScreenState, ringColor: Color, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Box(modifier) {
-        androidx.compose.runtime.key(state.generation.intValue) { content() }
+        content()
         // The ring lives in its own layer: moving or animating it re-records only this layer,
         // never the screen underneath.
         Spacer(Modifier.matchParentSize().graphicsLayer().drawBehind { state.drawRing(this, ringColor) })
@@ -395,12 +451,78 @@ fun Modifier.focusItem(
     scale: Boolean = false,
     /** The focused scale for this item; 0 = the screen's focusScale (1.04). */
     scaleAmount: Float = 0f,
-): Modifier = onGloballyPositioned { state.register(index, it, style, scrolling, scale, scaleAmount) }
+): Modifier = this then FocusItemElement(state, index, style, scrolling, scale, scaleAmount)
 
-/** The scrolling region: offset at placement, so a scroll never recomposes or measures. */
+private data class FocusItemElement(
+    val state: FocusScreenState,
+    val index: Int,
+    val style: FocusStyle,
+    val scrolling: Boolean,
+    val scale: Boolean,
+    val scaleAmount: Float,
+) : ModifierNodeElement<FocusItemNode>() {
+    override fun create() = FocusItemNode(state, index, style, scrolling, scale, scaleAmount)
+    override fun update(node: FocusItemNode) = node.update(state, index, style, scrolling, scale, scaleAmount)
+}
+
+/**
+ * A focus item's registration. It registers on every global position change, clears its slot
+ * when it leaves composition, and moves its slot when its index changes, so the screen's arrays
+ * always match what is composed without remounting anything.
+ */
+internal class FocusItemNode(
+    private var state: FocusScreenState,
+    private var index: Int,
+    private var style: FocusStyle,
+    private var scrolling: Boolean,
+    private var scale: Boolean,
+    private var scaleAmount: Float,
+) : Modifier.Node(), GlobalPositionAwareModifierNode {
+    private var coords: LayoutCoordinates? = null
+
+    override fun onAttach() = state.attach(this)
+
+    override fun onDetach() {
+        state.unregister(this, index, detach = true)
+        coords = null
+    }
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        coords = coordinates
+        state.register(this, index, coordinates, style, scrolling, scale, scaleAmount)
+    }
+
+    fun update(state: FocusScreenState, index: Int, style: FocusStyle, scrolling: Boolean, scale: Boolean, scaleAmount: Float) {
+        if (state !== this.state) {
+            this.state.unregister(this, this.index, detach = true)
+            state.attach(this)
+        } else if (index != this.index) {
+            state.unregister(this, this.index, detach = false)
+        }
+        this.state = state; this.index = index; this.style = style; this.scrolling = scrolling; this.scale = scale; this.scaleAmount = scaleAmount
+        reRegister()
+    }
+
+    fun reRegister() {
+        val c = coords ?: return
+        if (isAttached && c.isAttached) state.register(this, index, c, style, scrolling, scale, scaleAmount)
+    }
+}
+
+/**
+ * The scrolling region. Its content is measured at full height (never squeezed into the
+ * viewport) and scrolled by a canvas translation in its own layer, so a scroll re-records one
+ * draw op: nothing recomposes, measures, places or re-registers.
+ */
 fun Modifier.focusScroll(state: FocusScreenState): Modifier =
-    offset { IntOffset(0, -state.scrollY.floatValue.roundToInt()) }
-        .onGloballyPositioned { }
+    this.graphicsLayer()
+        .drawWithContent {
+            val s = state.scrollY.floatValue
+            if (s == 0f) drawContent() else translate(0f, -s.roundToInt().toFloat()) { this@drawWithContent.drawContent() }
+        }
+        .graphicsLayer()
+        .wrapContentHeight(Alignment.Top, unbounded = true)
+        .onGloballyPositioned { state.contentBottom = it.positionInRoot().y + it.size.height }
 
 /** Tells the state where the scrolling viewport is (call on the clipping container). */
 fun Modifier.focusViewport(state: FocusScreenState): Modifier = onGloballyPositioned {

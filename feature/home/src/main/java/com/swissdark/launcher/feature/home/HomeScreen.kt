@@ -14,6 +14,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
+import com.swissdark.launcher.core.focus.HomePress
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -120,6 +124,10 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     LaunchedEffect(keys) {
         val idx = keys.indexOf(lastKey[0])
         if (idx >= 0 && idx != focus.focused) focus.focus(idx)
+    }
+    // Home pressed while Home is already in front: back to the first Up next card (or first app).
+    LaunchedEffect(focus) {
+        snapshotFlow { HomePress.count.intValue }.drop(1).collect { if (focus.count > 0) focus.focus(0) }
     }
     // MENU: a press opens Quick settings, holding it opens Launcher settings.
     val menuHeld = remember { BooleanArray(1) }
@@ -259,8 +267,10 @@ private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
 
 @Composable
 private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, status: HomeStatus) {
-    val i = focused.intValue
-    val item = up.getOrNull(if (i < up.size) i else 0)
+    // Derived: a press recomposes the hero only when it lands on a different Up next card,
+    // not on every move between app tiles and links.
+    val heroIndex by remember(up) { derivedStateOf { val i = focused.intValue; if (i < up.size) i else 0 } }
+    val item = up.getOrNull(heroIndex)
     // New card under focus: the hero text fades up from 20 % and slides 12 px in from the right.
     val reduce = LocalReduceMotion.current
     val swap = remember { Animatable(1f) }
@@ -323,13 +333,18 @@ fun ContinueItem.isAppOnly(): Boolean = source == ContinueSource.APP || (title =
  */
 @Composable
 private fun HintBar(focus: FocusScreenState, shown: Boolean, up: List<ContinueItem>, apps: List<AppEntry>) {
-    val i = if (shown) focus.engine.focused.intValue else -1
+    // Every focusable's hints are built once per snapshot; a press only picks a list, and the bar
+    // recomposes only when the picked list actually changes.
+    val all = remember(up, apps) { Array(up.size + apps.size + 1) { hints(it, up, apps) } }
+    val list by remember(all, shown) {
+        derivedStateOf { if (!shown) emptyList() else all.getOrElse(focus.engine.focused.intValue) { all.last() } }
+    }
     Row(
         Modifier.fillMaxWidth().topRule().padding(top = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(48.dp),
     ) {
-        if (shown) for (k in hints(i, up, apps)) KeyHintText(k)
+        for (k in list) KeyHintText(k)
     }
 }
 
@@ -340,7 +355,7 @@ private fun hints(i: Int, up: List<ContinueItem>, apps: List<AppEntry>): List<Ke
     val nUp = up.size
     return when {
         i in 0 until nUp -> listOf(
-            KeyHint("OK", if (up[i].isAppOnly()) "Open ${up[i].serviceName}" else "Resume"),
+            KeyHint("OK", if (up[i].isAppOnly() && !up[i].isAppPlayback()) "Open ${up[i].serviceName}" else "Resume"),
             KeyHint("Hold OK", "Remove"),
             MenuHint,
         )
@@ -350,5 +365,13 @@ private fun hints(i: Int, up: List<ContinueItem>, apps: List<AppEntry>): List<Ke
             MenuHint,
         )
         else -> listOf(KeyHint("OK", "Open"), KeyHint("Back", "Continue watching"), MenuHint, HoldMenuHint)
+
     }
 }
+
+/**
+ * Something played in an app that never says what (Netflix, Prime Video…): the card is the app.
+ * OK resumes it straight away (live session, else the app); there is no title page to show.
+ * Matches WatchedStore's "<package>|@app" rows.
+ */
+fun ContinueItem.isAppPlayback(): Boolean = source == ContinueSource.WATCHED && title == null && key.endsWith("|@app")

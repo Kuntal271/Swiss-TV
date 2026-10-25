@@ -298,6 +298,7 @@ class HomeRepositoryImpl(
     private fun fromWatched(w: WatchedRow, byPkg: Map<String, AppEntry>, now: Long): ContinueItem? {
         val app = byPkg[w.pkg] ?: return null
         val svc = Providers.byPackage(w.pkg)?.name ?: app.label
+        if (w.appOnly) return fromAppPlayback(w, app, svc, now)
         val progress = if (w.durationMs > 0) (w.positionMs.toFloat() / w.durationMs).coerceIn(0f, 1f) else null
         val left = if (w.durationMs > 0) ((w.durationMs - w.positionMs) / 60_000L).toInt().coerceAtLeast(1) else null
         val se = when {
@@ -312,6 +313,24 @@ class HomeRepositoryImpl(
             artKey = w.art ?: w.tmdbArt ?: "banner:" + w.pkg, source = ContinueSource.WATCHED,
             intentUri = WatchedStore.PREFIX + w.key, season = w.season, episode = w.episode, minutesLeft = left,
             subtitle = w.episodeTitle,
+        )
+    }
+
+    /**
+     * Netflix, Prime…: they play without saying what. The card is the app's banner under its own
+     * name: "Netflix" · "23 min left" with a bar when the app's numbers are sane, else
+     * "Netflix" · "Watched 2 h ago". OK goes straight back into the app.
+     */
+    private fun fromAppPlayback(w: WatchedRow, app: AppEntry, svc: String, now: Long): ContinueItem {
+        val known = w.durationMs > 0 && w.positionMs in 1 until w.durationMs
+        val progress = if (known) w.positionMs.toFloat() / w.durationMs else null
+        val left = if (known) ((w.durationMs - w.positionMs) / 60_000L).toInt().coerceAtLeast(1) else null
+        val meta = left?.let { "${duration(it)} left" } ?: "Watched ${ago(now - w.updatedAt)}"
+        return ContinueItem(
+            key = "w:" + w.key, title = null, service = app.id, serviceName = svc,
+            name = svc, meta = meta, progress = progress,
+            artKey = "banner:" + w.pkg, source = ContinueSource.WATCHED,
+            intentUri = WatchedStore.PREFIX + w.key, minutesLeft = left,
         )
     }
 

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -114,22 +115,31 @@ fun Label(text: String, modifier: Modifier = Modifier, color: Color = Swiss.Mute
 
 // ---------- page frame ----------
 
-/** Wallpaper (already darkened at decode) with an optional extra scrim for non-Home screens. */
+/**
+ * Wallpaper (already darkened at decode). Screens that want it darker pass [totalDim]: the extra
+ * dim is a colour filter on the wallpaper's own draw (multiply), not a full-screen scrim layer,
+ * so the GPU fills the screen once instead of twice.
+ */
 @Composable
 fun Backdrop(wallpaper: PreparedWallpaper?, totalDim: Float? = null, modifier: Modifier = Modifier) {
+    val extra = if (totalDim != null && wallpaper != null) {
+        // Wallpaper is pre-darkened by d; multiply the rest so the total matches the design.
+        val d = wallpaper.dim
+        if (d >= 1f) 0f else (1f - (1f - totalDim) / (1f - d)).coerceIn(0f, 1f)
+    } else 0f
+    val filter = remember(extra) {
+        if (extra <= 0f) null else {
+            val k = 1f - extra
+            ColorFilter.lighting(multiply = Color(k, k, k), add = Color.Black)
+        }
+    }
     Box(modifier.fillMaxSize().background(Swiss.Ground)) {
         Crossfade(wallpaper, animationSpec = tween(600), label = "wallpaper") { wp ->
             val bmp = wp?.bitmap
             if (bmp != null) {
                 val img = remember(bmp) { bmp.asImageBitmap() }
-                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, colorFilter = filter)
             }
-        }
-        if (totalDim != null && wallpaper != null) {
-            // Wallpaper is pre-darkened by d; add a scrim so the total matches the design.
-            val d = wallpaper.dim
-            val extra = if (d >= 1f) 0f else (1f - (1f - totalDim) / (1f - d)).coerceIn(0f, 1f)
-            if (extra > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = extra)))
         }
     }
 }
@@ -154,7 +164,7 @@ fun Header(a: String, b: String, c: String, d: String) {
     }
 }
 
-class KeyHint(val key: String, val action: String)
+data class KeyHint(val key: String, val action: String)
 
 @Composable
 fun Footer(hint: String, keys: List<KeyHint>, modifier: Modifier = Modifier) {

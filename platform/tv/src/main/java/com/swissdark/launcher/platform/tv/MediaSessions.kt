@@ -27,8 +27,10 @@ data class MediaSample(
     val mediaId: String?,
     val artUri: String?,            // ART_URI / DISPLAY_ICON_URI / ALBUM_ART_URI
     val art: Bitmap?,               // ART / DISPLAY_ICON / ALBUM_ART, only when there is no URI
-    val positionMs: Long,
+    val positionMs: Long,           // extrapolated to now while playing
     val durationMs: Long,
+    /** What the app itself last reported, before extrapolation: Prime keeps this at 0. */
+    val reportedPositionMs: Long,
     val playing: Boolean,
     val ended: Boolean,             // STATE_STOPPED or the session went away
     val sessionActivity: PendingIntent?,
@@ -124,6 +126,21 @@ class MediaSessionWatcher(
     fun sessionActivity(pkg: String): PendingIntent? =
         tracked.values.firstOrNull { it.controller.packageName == pkg }?.controller?.sessionActivity
 
+    /** True while [pkg] still has a session we are following. */
+    fun isLive(pkg: String): Boolean = tracked.values.any { it.controller.packageName == pkg }
+
+    /** Unpause [pkg]'s live session (only if it is paused). Main thread. */
+    fun play(pkg: String): Boolean {
+        val c = tracked.values.firstOrNull { it.controller.packageName == pkg }?.controller ?: return false
+        return try {
+            if (c.playbackState?.state != PlaybackState.STATE_PAUSED) return false
+            c.transportControls.play()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun activeSessions(): List<MediaController> = try {
         msm.getActiveSessions(listener)
     } catch (_: SecurityException) {
@@ -183,13 +200,14 @@ class MediaSessionWatcher(
             art = bmp,
             positionMs = pos.coerceAtLeast(0L),
             durationMs = md?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.coerceAtLeast(0L) ?: 0L,
+            reportedPositionMs = (st?.position ?: 0L).coerceAtLeast(0L),
             playing = playing,
             ended = ended || st?.state == PlaybackState.STATE_STOPPED,
             sessionActivity = c.sessionActivity,
             atMillis = now,
         )
         if (Log.isLoggable(TAG, Log.DEBUG) || DEBUG_LOG) {
-            Log.i(TAG, "${c.packageName} state=${st?.state} pos=${sample.positionMs} dur=${sample.durationMs} keys=${md?.keySet()?.toList()} " +
+            Log.i(TAG, "${c.packageName} state=${st?.state} pos=${sample.positionMs} raw=${st?.position} actions=${st?.actions} dur=${sample.durationMs} keys=${md?.keySet()?.toList()} " +
                 "title=${sample.title} sub=${sample.subtitle} artist=${sample.artist} album=${sample.album} desc=${sample.description} " +
                 "id=${sample.mediaId} uri=${sample.artUri} bmp=${bmp?.width}x${bmp?.height} activity=${c.sessionActivity != null}")
         }

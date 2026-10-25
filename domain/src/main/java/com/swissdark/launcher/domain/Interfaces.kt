@@ -60,6 +60,8 @@ interface SearchEngine {
     suspend fun byGenre(genre: String): List<SearchHit>
     suspend fun byPerson(personId: Int): List<SearchHit>
     suspend fun availability(hits: List<SearchHit.Title>): List<SearchHit.Title>
+    /** Where online titles come from right now: "TMDB", "OMDb + TVmaze" or "TVmaze". */
+    val titleSource: String get() = "TMDB"
 }
 
 interface TitleRepository {

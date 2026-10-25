@@ -50,6 +50,8 @@ import com.swissdark.launcher.core.design.rememberFocusInk
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
 import com.swissdark.launcher.core.design.T
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import com.swissdark.launcher.core.design.bottomRule
 import com.swissdark.launcher.core.design.leftRule
 import com.swissdark.launcher.core.design.rememberMinute
@@ -146,7 +148,7 @@ fun InputsPanel(inputs: List<TvInput>, current: String?, wallpaper: PreparedWall
                 // The list takes the free height and scrolls with focus when the TV reports more
                 // inputs than fit (the design shows four; this TV reports seven).
                 Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().focusViewport(focus)) {
-                    Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).focusScroll(focus)) {
+                    Column(Modifier.fillMaxWidth().focusScroll(focus)) {
                         if (inputs.isEmpty()) T("No inputs reported by this TV.", SwissType.Body)
                         for ((i, inp) in inputs.withIndex()) {
                             PanelRow(focus, i, last = i == inputs.lastIndex, scrolling = true) { c ->
@@ -184,6 +186,10 @@ class QuickActions(
 private val pictures = listOf(PictureMode.MOVIE to "Movie", PictureMode.STANDARD to "Standard", PictureMode.VIVID to "Vivid", PictureMode.GAME to "Game")
 private val sounds = listOf(SoundMode.STANDARD to "Standard", SoundMode.DIALOGUE to "Dialogue", SoundMode.NIGHT to "Night")
 private val sleeps = listOf(0 to "Off", 30 to "30", 60 to "60", 90 to "90 min")
+private val pictureNames = pictures.map { it.second }
+private val soundNames = sounds.map { it.second }
+private val sleepNames = sleeps.map { it.second }
+private val linkNames = listOf("All TV settings →", "Launcher settings →")
 
 // Rows, top to bottom. One focus item each; LEFT/RIGHT move a cursor inside the row.
 private const val ROW_PICTURE = 0
@@ -254,14 +260,14 @@ fun QuickSettingsPanel(
                 // 36 px above it read as an empty bordered row above PICTURE (bug 1).
                 PanelHeader("Quick settings", status, rule = false)
                 Column(Modifier.fillMaxWidth()) {
-                    OptionRow(focus, ROW_PICTURE, "Picture", pictures.map { it.second }, pictureSel, cursor)
-                    OptionRow(focus, ROW_SOUND, "Sound", sounds.map { it.second }, soundSel, cursor)
-                    OptionRow(focus, ROW_SLEEP, "Sleep", sleeps.map { it.second }, sleepSel, cursor)
+                    OptionRow(focus, ROW_PICTURE, "Picture", pictureNames, pictureSel, cursor)
+                    OptionRow(focus, ROW_SOUND, "Sound", soundNames, soundSel, cursor)
+                    OptionRow(focus, ROW_SLEEP, "Sleep", sleepNames, sleepSel, cursor)
                     ValueRow(focus, ROW_NETWORK, "Network", networkName, last = false)
                     ValueRow(focus, ROW_SCREEN, "Screen", "Picture off, sound on", last = true)
                 }
                 Box(Modifier.weight(1f))
-                LinksRow(focus, ROW_LINKS, listOf("All TV settings →", "Launcher settings →"), cursor)
+                LinksRow(focus, ROW_LINKS, linkNames, cursor)
             }
         }
     }
