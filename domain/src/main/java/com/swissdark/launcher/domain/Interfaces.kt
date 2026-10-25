@@ -124,4 +124,14 @@ object Providers {
 /** Pre-sized app banners for cards when a title has no artwork. Cached; safe to call on any thread. */
 interface AppArt {
     fun banner(packageName: String, width: Int, height: Int): Bitmap?
+
+    /**
+     * 16:9 art for an app tile: the app's TV banner, else its launcher icon (or the chosen icon
+     * pack's) drawn large on its brand colour. Null = no art; draw the glyph. Slow on a miss
+     * (PackageManager, decoding): call it off the main thread. [iconPack] "" = app logos.
+     */
+    fun tile(component: String, width: Int, height: Int, iconPack: String): Bitmap? = null
+
+    /** [tile] from the cache only: never blocks. */
+    fun cachedTile(component: String, width: Int, height: Int, iconPack: String): Bitmap? = null
 }

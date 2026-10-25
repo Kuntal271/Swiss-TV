@@ -73,9 +73,12 @@ class PackagesAdapter(private val context: Context) {
     }
 }
 
-/** App banners (320 × 180 on Android TV), scaled once to the size they are drawn at. */
+/**
+ * App banners (320 × 180 on Android TV) and tile art, scaled once to the size they are drawn at
+ * and kept as HARDWARE bitmaps (GPU memory, drawn without an upload).
+ */
 class BannerArt(private val context: Context) : AppArt {
-    private val cache = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    private val cache = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
     private val noBanner: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -114,10 +117,53 @@ class BannerArt(private val context: Context) : AppArt {
         return hw
     }
 
+    private val noTile: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private fun tileKey(component: String, width: Int, height: Int, iconPack: String) = "tile:$component|$iconPack@${width}x$height"
+
+    override fun cachedTile(component: String, width: Int, height: Int, iconPack: String): Bitmap? {
+        cache.get(tileKey(component, width, height, iconPack))?.let { return it }
+        if (iconPack.isEmpty()) {
+            val pkg = component.substringBefore('/')
+            cache.get("$pkg@${width}x$height")?.let { return it }
+        }
+        return null
+    }
+
+    override fun tile(component: String, width: Int, height: Int, iconPack: String): Bitmap? {
+        cachedTile(component, width, height, iconPack)?.let { return it }
+        val key = tileKey(component, width, height, iconPack)
+        if (key in noTile) return null
+        val pkg = component.substringBefore('/')
+        // A chosen icon pack wins; otherwise the app's own TV banner, then its launcher icon.
+        val packTile = if (iconPack.isEmpty()) null
+        else runCatching { IconTileRenderer.render(context, component, iconPack, width, height) }.getOrNull()
+        if (packTile == null) banner(pkg, width, height)?.let { return it }
+        val sw = packTile ?: runCatching { IconTileRenderer.render(context, component, "", width, height) }.getOrNull()
+            ?: run { noTile += key; return null }
+        val hw = sw.copy(Bitmap.Config.HARDWARE, false) ?: sw
+        if (hw !== sw) sw.recycle()
+        cache.put(key, hw)
+        return hw
+    }
+
     fun trim() = cache.evictAll()
 
+    /** Drops everything but the tiles of [components] and the banners of [packages]. */
+    fun trimExcept(components: Set<String>, packages: Set<String>) {
+        for (k in cache.snapshot().keys) {
+            val keep = if (k.startsWith("tile:")) k.removePrefix("tile:").substringBefore('|') in components
+            else k.substringBefore('@') in packages
+            if (!keep) cache.remove(k)
+        }
+    }
+
     /** An app update can add a banner: forget the misses when packages change. */
-    fun forgetMisses() = noBanner.clear()
+    fun forgetMisses() {
+        noBanner.clear()
+        noTile.clear()
+        IconPacks.forget()
+    }
 }
 
 /** Is this launcher the Home app? The answer a TCL or Google update can silently change. */

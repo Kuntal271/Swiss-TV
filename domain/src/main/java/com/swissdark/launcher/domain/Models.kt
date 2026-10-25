@@ -190,6 +190,7 @@ data class LauncherSettings(
     val sleepMinutes: Int = 0,
     val searchIntentApps: Map<String, Boolean> = emptyMap(),
     val showLatencyOverlay: Boolean = false,
+    val iconPack: String = "",                         // icon pack package; "" = the apps' own logos
 )
 
 /** TCL utilities that clutter the app list. Hidden, not disabled; unhide in Launcher settings › Apps. */

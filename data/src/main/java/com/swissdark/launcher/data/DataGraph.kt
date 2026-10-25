@@ -97,14 +97,32 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                 // Banners at the Up next card's decode size (PosterCard default 480 x 270).
                 keys.filter { it.startsWith("banner:") }.forEach { art.banner(it.removePrefix("banner:"), 480, 270) }
                 warmImages(keys.filterNot { it.startsWith("banner:") })
+                warmTiles(snap.apps.map { it.id.component })
             } }
         }, "prewarm-home").start()
+    }
+
+    /** Installed ADW / Nova icon packs, package to label (PackageManager query: call off the hot path). */
+    fun iconPacks(): List<Pair<String, String>> =
+        com.swissdark.launcher.platform.tv.IconPacks.installed(context).map { it.packageName to it.label }
+
+    /** Tile art (banner or logo on colour) for these components, at the size tiles decode at. */
+    private fun warmTiles(components: List<String>) {
+        val pack = settings.settings.value.iconPack
+        for (c in components) runCatching { art.tile(c, TILE_W, TILE_H, pack) }
     }
 
     /** The launcher went to the background or the system is short of memory: drop caches. */
     fun trimMemory(level: Int) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            if (artLazy.isInitialized()) art.trim()
+            // Keep what Home draws, so coming back from an app never waits on a re-decode.
+            if (artLazy.isInitialized()) runCatching {
+                val snap = home.snapshot.value
+                val comps = snap.apps.mapTo(HashSet()) { it.id.component }
+                val pkgs = comps.mapTo(HashSet()) { it.substringBefore('/') }
+                snap.upNext.forEach { if (it.artKey.startsWith("banner:")) pkgs += it.artKey.removePrefix("banner:") }
+                if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) art.trim() else art.trimExcept(comps, pkgs)
+            }
             if (wallpapersLazy.isInitialized()) wallpapers.trim()
         }
     }
@@ -122,6 +140,17 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
             search.rebuildIndex()
         }
         watchNext.observe { refresh(RefreshReason.WATCH_NEXT_CHANGED) }
+        // All apps' tile art, a little after start-up, so the grid opens with every logo cached.
+        scope.launch {
+            kotlinx.coroutines.delay(3_000)
+            warmTiles(apps.apps.value.map { it.id.component })
+        }
+        scope.launch {
+            var last = settings.settings.value.iconPack
+            settings.settings.collect { s ->
+                if (s.iconPack != last) { last = s.iconPack; warmTiles(apps.apps.value.map { it.id.component }) }
+            }
+        }
         watched.start()      // media sessions → Up next; a no-op until setup.sh enables the listener
         wallpapers.start()
         refresh(RefreshReason.COLD_START)
@@ -140,5 +169,8 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
 
     companion object {
         @Volatile var instance: DataGraph? = null
+        // Same as core.design TILE_ART_W / TILE_ART_H (data does not depend on the design module).
+        const val TILE_W = 320
+        const val TILE_H = 180
     }
 }
