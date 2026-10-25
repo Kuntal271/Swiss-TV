@@ -175,8 +175,8 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
 
     /** Only after the first frame: refreshers, receivers, image cache warm-up. */
     /**
-     * Continue watching cards that show only the app's banner (or Crunchyroll's own picture):
-     * look the show up once, in the background, and give the card its art.
+     * Continue watching cards that show only the app's banner (and Crunchyroll's): look the show or
+     * episode up once, in the background, and give the card its art.
      */
     private fun watchCardArt() {
         val tried = HashSet<String>()
@@ -185,10 +185,11 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                 for (item in snap.upNext) {
                     if (!item.key.startsWith("w:") || item.key.endsWith("|" + WatchedStore.APP_GROUP)) continue
                     val crunchy = item.service.packageName == WatchedStore.CRUNCHYROLL
-                    if (!item.artKey.startsWith("banner:") && !(crunchy && item.artKey.startsWith("file:"))) continue
+                    if (!crunchy && !item.artKey.startsWith("banner:")) continue
                     if (!tried.add(item.key + "|" + item.name)) continue
                     launch {
-                        val url = backdropArt.showArtUrl(item) ?: return@launch
+                        // Crunchyroll: the episode's own still; others: the show's art.
+                        val url = (if (crunchy) backdropArt.episodeArtUrl(item) else backdropArt.showArtUrl(item)) ?: return@launch
                         watched.setShowArt(item.key.removePrefix("w:"), url)
                     }
                 }

@@ -238,8 +238,8 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
         // Easter egg: a small signature in the bottom-right corner, under the key-hint bar.
         com.swissdark.launcher.core.design.T(
             "Made with \u2665 by Kuntal",
-            SwissType.Meta.copy(fontSize = 18.sp),
-            Modifier.align(Alignment.BottomEnd).padding(end = Swiss.MARGIN_X.dp, bottom = 12.dp),
+            SwissType.Meta.copy(fontSize = 22.sp),
+            Modifier.align(Alignment.BottomEnd).padding(end = Swiss.MARGIN_X.dp, bottom = 26.dp),
             Swiss.Muted.copy(alpha = 0.7f),
         )
         FocusRoot(focus, Swiss.Focus) {

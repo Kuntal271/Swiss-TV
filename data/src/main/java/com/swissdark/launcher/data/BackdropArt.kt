@@ -88,11 +88,22 @@ class BackdropArt(
     fun trim() = cache.evictAll()
 
     /**
-     * The show's own picture for a card that has none of its own (Crunchyroll publishes only the
-     * episode name): the same lookup the backdrop uses, so it is remembered for both. Never throws.
+     * The picture of the episode itself (TVmaze's episode still) for a card whose app publishes only
+     * the episode name (Crunchyroll). Finds the show the same way the backdrop does. Never throws.
      */
     suspend fun showArtUrl(item: ContinueItem): String? = try {
         resolveUrl(item)?.first
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    suspend fun episodeArtUrl(item: ContinueItem): String? = try {
+        resolveUrl(item)                                   // finds and remembers the show
+        val id = prefs.getInt("s:" + item.key, -1).takeIf { it > 0 }
+        val show = id?.let { sources.tvmaze.show(it) }
+        BackdropMatch.episodeImage(show, item.name, item.season, item.episode)
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -407,6 +418,17 @@ object BackdropMatch {
             }
         }
         return hits.singleOrNull()
+    }
+
+    /** The still of the episode called [name] (and numbered like it, when known) in [show]'s episode list. */
+    fun episodeImage(show: JsonObject?, name: String, season: Int?, episode: Int?): String? {
+        val q = norm(name)
+        val eps = show?.obj("_embedded")?.arr("episodes").orEmpty().mapNotNull { it as? JsonObject }
+        val e = eps.firstOrNull {
+            norm(it.str("name").orEmpty()) == q && (episode == null || it.int("number") == episode) && (season == null || it.int("season") == season)
+        } ?: return null
+        val img = e.obj("image")
+        return img?.str("original") ?: img?.str("medium")
     }
 
     /** Background image (main first), else the show's poster. */
