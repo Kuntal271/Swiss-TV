@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -142,7 +143,7 @@ fun AllAppsScreen(
                 T("All apps · ${apps.size}", SwissType.Row44, maxLines = 1)
                 Box(Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
                     // 12 px of air above the first row so its ring and scale are never clipped.
-                    Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                    Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                         for (r in 0 until (apps.size + COLS - 1) / COLS) {
                             Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                                 for (c in 0 until COLS) {

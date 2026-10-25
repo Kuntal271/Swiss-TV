@@ -94,10 +94,15 @@ class BannerArt(private val context: Context) : AppArt {
             val app = pm.getApplicationInfo(packageName, 0)
             val cn = pm.getLeanbackLaunchIntentForPackage(packageName)?.component
             val activity = cn?.let { runCatching { pm.getActivityInfo(it, 0) }.getOrNull() }
+            val res = when {
+                cn != null && activity != null && activity.banner != 0 -> activity.banner
+                app.banner != 0 -> app.banner
+                else -> 0
+            }
             when {
+                res == 0 || isGenericBanner(pm, app, res) -> null
                 cn != null && activity != null && activity.banner != 0 -> pm.getActivityBanner(cn)
-                app.banner != 0 -> pm.getApplicationBanner(app)
-                else -> null
+                else -> pm.getApplicationBanner(app)
             }
         } catch (_: Exception) {
             null
@@ -145,6 +150,16 @@ class BannerArt(private val context: Context) : AppArt {
         if (hw !== sw) sw.recycle()
         cache.put(key, hw)
         return hw
+    }
+
+    /**
+     * A placeholder banner (the framework's, or a vendor's stock "Android TV" art) is worse than
+     * the app's own logo: treat it as no banner.
+     */
+    private fun isGenericBanner(pm: PackageManager, app: android.content.pm.ApplicationInfo, res: Int): Boolean {
+        if (res ushr 24 == 0x01) return true                       // android framework resource
+        val name = runCatching { pm.getResourcesForApplication(app).getResourceEntryName(res) }.getOrNull() ?: return false
+        return name.contains("default", ignoreCase = true) || name.contains("generic", ignoreCase = true)
     }
 
     fun trim() = cache.evictAll()
