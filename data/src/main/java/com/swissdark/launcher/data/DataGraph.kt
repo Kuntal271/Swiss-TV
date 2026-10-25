@@ -14,6 +14,7 @@ import com.swissdark.launcher.platform.tv.TclSettingsAdapter
 import com.swissdark.launcher.platform.tv.UsageAdapter
 import com.swissdark.launcher.platform.tv.VoiceAdapter
 import com.swissdark.launcher.platform.tv.WatchNextAdapter
+import com.swissdark.launcher.core.perf.traced
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,7 +40,8 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     val voice by lazy { VoiceAdapter(context) }
     val inputs by lazy { InputsAdapter(context) }
     val quickSettings by lazy { TclSettingsAdapter(context, launchAdapter) }
-    val art by lazy { BannerArt(context) }
+    private val artLazy = lazy { BannerArt(context) }
+    val art by artLazy
     val habits by lazy { HabitStore(context) }
     val snapshots by lazy { SnapshotStore(context, scope) }
     val db by lazy { LauncherDb.open(context) }
@@ -55,11 +57,13 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     val tmdb by lazy { TmdbClient(http) { settings.settings.value.tmdbKey.ifBlank { bakedTmdbKey } } }
 
     val apps by lazy { AppsRepositoryImpl(packages, settings, scope) }
-    val home by lazy { HomeRepositoryImpl(context, scope, settings, apps, habits, usage, watchNext, db.dao(), snapshots) }
-    val wallpapers by lazy { WallpaperSchedulerImpl(context, scope, settings) }
+    val watched by lazy { WatchedStore(context, scope, tmdb, launchAdapter) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
+    val home by lazy { HomeRepositoryImpl(context, scope, settings, apps, habits, usage, watchNext, db.dao(), snapshots, watched) }
+    private val wallpapersLazy = lazy { WallpaperSchedulerImpl(context, scope, settings) }
+    val wallpapers by wallpapersLazy
     val search by lazy { SearchEngineImpl(scope, db.dao(), tmdb, apps, settings) }
     val titles by lazy { TitleRepositoryImpl(scope, db.dao(), tmdb, settings) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
-    val launcher by lazy { AppLauncherImpl(scope, launchAdapter, habits, settings, apps) { refresh(it) } }
+    val launcher by lazy { AppLauncherImpl(scope, launchAdapter, habits, settings, apps) { refresh(it) }.also { it.watchedOpener = { u -> watched.open(u) } } }
 
     val status: DeviceStatus by lazy {
         object : DeviceStatus {
@@ -75,6 +79,36 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
         }
     }
 
+    /**
+     * Cold start: build what the first Home frame reads (settings, the L2 snapshot, the mapped
+     * wallpaper, app banners for Up next) on two background threads while the activity and
+     * Compose are still being created. The lazies are synchronized, so if the first composition
+     * gets there first it simply waits for the remainder instead of doing it all on main.
+     */
+    fun prewarm(warmImages: (urls: List<String>) -> Unit = {}) {
+        Thread({
+            runCatching { traced("startup.prewarm.wallpaper") { wallpapers.current.value } }
+        }, "prewarm-wallpaper").start()
+        Thread({
+            runCatching { traced("startup.prewarm.home") {
+                val snap = home.snapshot.value
+                status.deviceName
+                val keys = snap.upNext.map { it.artKey }
+                // Banners at the Up next card's decode size (PosterCard default 480 x 270).
+                keys.filter { it.startsWith("banner:") }.forEach { art.banner(it.removePrefix("banner:"), 480, 270) }
+                warmImages(keys.filterNot { it.startsWith("banner:") })
+            } }
+        }, "prewarm-home").start()
+    }
+
+    /** The launcher went to the background or the system is short of memory: drop caches. */
+    fun trimMemory(level: Int) {
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            if (artLazy.isInitialized()) art.trim()
+            if (wallpapersLazy.isInitialized()) wallpapers.trim()
+        }
+    }
+
     fun refresh(reason: RefreshReason) {
         scope.launch { home.refresh(reason) }
     }
@@ -83,10 +117,12 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     fun startBackground() {
         network.start()
         packages.watch {
+            if (artLazy.isInitialized()) art.forgetMisses()
             refresh(RefreshReason.PACKAGES_CHANGED)
             search.rebuildIndex()
         }
         watchNext.observe { refresh(RefreshReason.WATCH_NEXT_CHANGED) }
+        watched.start()      // media sessions → Up next; a no-op until setup.sh enables the listener
         wallpapers.start()
         refresh(RefreshReason.COLD_START)
         search.rebuildIndex()

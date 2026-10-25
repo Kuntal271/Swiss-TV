@@ -23,16 +23,24 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val DAY = 86_400_000L
+
+/** Titles from search/trending kept for the local index (Room and memory). */
+internal const val SEEN_CAP = 1_500
 
 /** inMyPlan = provider is in the user's services list in Settings. */
 fun Availability.withPlan(s: LauncherSettings): Availability {
@@ -73,18 +81,52 @@ class SearchEngineImpl(
     private val providerCache = LruCache<String, List<Availability>>(400)
     private val providerGate = Semaphore(6)
 
+    /** One rebuild at a time, in order; a burst of requests collapses into one rebuild. */
+    private val indexWorker = Dispatchers.Default.limitedParallelism(1)
+    private val rebuildQueued = AtomicBoolean(false)
+
+    /**
+     * Seen titles, decoded once from Room and then kept up to date in memory (oldest first,
+     * capped at [SEEN_CAP]), so a rebuild after each online search does not re-read and
+     * re-decode 1,500 JSON rows. Touched only on [indexWorker].
+     */
+    private var seenTitles: LinkedHashMap<String, SearchHit.Title>? = null
+
+    init {
+        // Installed/removed apps and hidden apps change what the index holds. The package
+        // receiver rebuilds the index before the app list is rescanned, so follow the list itself.
+        scope.launch {
+            combine(apps.apps, settings.settings.map { it.hidden }.distinctUntilChanged()) { a, h -> a to h }
+                .distinctUntilChanged()
+                .collect { rebuildIndex() }
+        }
+    }
+
     /** Rebuilt off the main thread whenever apps, history or seen titles change. */
     fun rebuildIndex() {
-        scope.launch(Dispatchers.Default) {
+        if (!rebuildQueued.compareAndSet(false, true)) return
+        scope.launch(indexWorker) {
+            rebuildQueued.set(false) // changes after this point queue another rebuild
             val recent = dao.searchesNow().map { SearchHit.Recent(it.query, it.kind) }
-            val titles = dao.seen().mapNotNull { runCatching { json.decodeFromString(HitDto.serializer(), it.json).toHit() as? SearchHit.Title }.getOrNull() }
+            val titles = seen().values.reversed() // most recent first, as before
             index = LocalIndex.build(apps.visible(), recent, titles)
         }
     }
 
+    private suspend fun seen(): LinkedHashMap<String, SearchHit.Title> = seenTitles ?: LinkedHashMap<String, SearchHit.Title>().also { m ->
+        for (r in dao.seen().asReversed()) {
+            val t = runCatching { json.decodeFromString(HitDto.serializer(), r.json).toHit() as? SearchHit.Title }.getOrNull() ?: continue
+            m[t.key] = t
+        }
+        seenTitles = m
+    }
+
     override fun local(query: String): List<SearchHit> = index.lookup(query)
 
-    /** Wave 2: 150 ms after the last keystroke, Room's copy from the last 24 h, else TMDB. */
+    /**
+     * Wave 2: 150 ms after the last keystroke, Room's copy from the last 24 h, else TMDB.
+     * JSON work runs on Default (flowOn), not in the collector's main-thread context.
+     */
     override fun remote(query: String): Flow<List<SearchHit>> = flow {
         val q = LocalIndex.normalize(query)
         if (q.length < 2 || !tmdb.hasKey) return@flow
@@ -98,12 +140,25 @@ class SearchEngineImpl(
         emit(hits)
         dao.putQuery(QueryRow(q, json.encodeToString(listSer, hits.mapNotNull { it.toDto() }), System.currentTimeMillis()))
         remember(hits.filterIsInstance<SearchHit.Title>())
-    }
+    }.flowOn(Dispatchers.Default)
 
     private suspend fun remember(titles: List<SearchHit.Title>) {
+        if (titles.isEmpty()) return
         val now = System.currentTimeMillis()
         dao.putSeen(titles.mapNotNull { t -> t.toDto()?.let { SeenRow(t.key, t.ref.name, json.encodeToString(HitDto.serializer(), it), now) } })
-        rebuildIndex()
+        withContext(indexWorker) {
+            val m = seen()
+            val before = m.size
+            var changed = false
+            for (t in titles) {
+                val old = m.remove(t.key)
+                m[t.key] = t // re-insert: most recent last
+                if (old == null || old.ref.name != t.ref.name) changed = true
+            }
+            while (m.size > SEEN_CAP) { m.remove(m.keys.first()); changed = true }
+            // Same titles seen again (trending, a re-typed query): the index text is unchanged.
+            if (changed || m.size != before) rebuildIndex()
+        }
     }
 
     override fun recent(): Flow<List<SearchHit.Recent>> = dao.searches().map { rows ->
@@ -125,37 +180,33 @@ class SearchEngineImpl(
         scope.launch { dao.deleteSearch(query); rebuildIndex() }
     }
 
-    override suspend fun trending(daily: Boolean): List<SearchHit.Title> {
+    override suspend fun trending(daily: Boolean): List<SearchHit.Title> = withContext(Dispatchers.Default) {
         val key = if (daily) "~trending/day" else "~trending/week"
         val cached = dao.query(key, System.currentTimeMillis() - DAY)
-        if (cached != null) return json.decodeFromString(listSer, cached.json).mapNotNull { it.toHit() as? SearchHit.Title }
-        if (!tmdb.hasKey) return emptyList()
+        if (cached != null) return@withContext json.decodeFromString(listSer, cached.json).mapNotNull { it.toHit() as? SearchHit.Title }
+        if (!tmdb.hasKey) return@withContext emptyList()
         val list = tmdb.trending(daily)
         dao.putQuery(QueryRow(key, json.encodeToString(listSer, list.mapNotNull { it.toDto() }), System.currentTimeMillis()))
         remember(list)
-        return list
+        list
     }
 
     /** Opens from cache when the network is slow: any copy, however old. */
-    suspend fun trendingCachedAnyAge(daily: Boolean): List<SearchHit.Title> {
+    suspend fun trendingCachedAnyAge(daily: Boolean): List<SearchHit.Title> = withContext(Dispatchers.Default) {
         val key = if (daily) "~trending/day" else "~trending/week"
-        return dao.query(key, 0)?.let { json.decodeFromString(listSer, it.json).mapNotNull { h -> h.toHit() as? SearchHit.Title } }.orEmpty()
+        dao.query(key, 0)?.let { json.decodeFromString(listSer, it.json).mapNotNull { h -> h.toHit() as? SearchHit.Title } }.orEmpty()
     }
 
-    override suspend fun byGenre(genre: String): List<SearchHit> {
-        val key = "~genre/$genre"
-        dao.query(key, System.currentTimeMillis() - DAY)?.let { return json.decodeFromString(listSer, it.json).map { h -> h.toHit() } }
-        val list = tmdb.discover(genre)
-        dao.putQuery(QueryRow(key, json.encodeToString(listSer, list.mapNotNull { it.toDto() }), System.currentTimeMillis()))
-        return list
-    }
+    override suspend fun byGenre(genre: String): List<SearchHit> = cachedList("~genre/$genre") { tmdb.discover(genre) }
 
-    override suspend fun byPerson(personId: Int): List<SearchHit> {
-        val key = "~person/$personId"
-        dao.query(key, System.currentTimeMillis() - DAY)?.let { return json.decodeFromString(listSer, it.json).map { h -> h.toHit() } }
-        val list = tmdb.personCredits(personId)
+    override suspend fun byPerson(personId: Int): List<SearchHit> = cachedList("~person/$personId") { tmdb.personCredits(personId) }
+
+    /** Room's copy from the last 24 h, else [fetch]; JSON work off the caller's (main) thread. */
+    private suspend fun cachedList(key: String, fetch: suspend () -> List<SearchHit>): List<SearchHit> = withContext(Dispatchers.Default) {
+        dao.query(key, System.currentTimeMillis() - DAY)?.let { return@withContext json.decodeFromString(listSer, it.json).map { h -> h.toHit() } }
+        val list = fetch()
         dao.putQuery(QueryRow(key, json.encodeToString(listSer, list.mapNotNull { it.toDto() }), System.currentTimeMillis()))
-        return list
+        list
     }
 
     /** Fetched in one batch after the list is drawn, so posters never wait for availability. */
@@ -184,7 +235,8 @@ class TitleRepositoryImpl(
 ) : TitleRepository {
     private val json = Json { ignoreUnknownKeys = true }
 
-    override suspend fun details(ref: TitleRef): TitleDetails? {
+    /** Decoding/encoding a details blob takes milliseconds on the TV: never on the main thread. */
+    override suspend fun details(ref: TitleRef): TitleDetails? = withContext(Dispatchers.Default) {
         val key = ref.type.name + ":" + ref.tmdbId
         val row = dao.title(key)
         val now = System.currentTimeMillis()
@@ -198,7 +250,7 @@ class TitleRepositoryImpl(
             }
         } else cached
         val s = settings.settings.value
-        return fresh?.copy(availability = fresh.availability.map { it.withPlan(s) })
+        fresh?.copy(availability = fresh.availability.map { it.withPlan(s) })
     }
 
     override fun saveForLater(details: TitleDetails) {
@@ -230,6 +282,9 @@ class TitleRepositoryImpl(
         val now = System.currentTimeMillis()
         dao.expireTitles(now - 30 * DAY)
         dao.expireQueries(now - 30 * DAY)
+        // One row per typed prefix: worthless after the 24 h window (trending/browse keep 30 days).
+        dao.expireTypedQueries(now - 2 * DAY)
+        dao.trimSeen(SEEN_CAP)
     }
 }
 
@@ -263,8 +318,13 @@ class AppLauncherImpl(
         return ok
     }
 
+    /** Up next items from media sessions ("swiss-watched:…"): live session or deep link first. */
+    var watchedOpener: ((String) -> Boolean)? = null
+
     override fun openTitle(title: TitleRef, service: AppId?, intentUri: String?): LaunchResult {
-        if (intentUri != null && launch.openUri(intentUri, service?.packageName)) return LaunchResult.Ok
+        if (intentUri != null && intentUri.startsWith(WatchedStore.PREFIX)) {
+            if (watchedOpener?.invoke(intentUri) == true) return LaunchResult.Ok
+        } else if (intentUri != null && launch.openUri(intentUri, service?.packageName)) return LaunchResult.Ok
         val pkg = service?.packageName ?: return LaunchResult.Failed("No service")
         if (acceptsSearch(pkg) && launch.search(pkg, title.name)) return LaunchResult.Ok
         val app = apps.apps.value.firstOrNull { it.id.packageName == pkg }

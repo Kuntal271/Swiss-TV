@@ -23,7 +23,9 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import com.swissdark.launcher.core.perf.KeyLatency
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -111,9 +113,11 @@ class FocusScreenState internal constructor(
         val y = p.y + if (scrolling) scrollY.floatValue else 0f
         val o = index * 4
         val w = c.size.width.toFloat(); val h = c.size.height.toFloat()
+        var changed = styles[index] != style || scrolls[index] != scrolling || !seen[index]
         if (rects[o] != p.x || rects[o + 1] != y || rects[o + 2] != w || rects[o + 3] != h) {
             rects[o] = p.x; rects[o + 1] = y; rects[o + 2] = w; rects[o + 3] = h
             dirty = true
+            changed = true
         }
         styles[index] = style
         scrolls[index] = scrolling
@@ -121,7 +125,17 @@ class FocusScreenState internal constructor(
             seen[index] = true
             seenCount++
         }
-        if (index == engine.focused.intValue) placeRing(animate = false)
+        // Global layout passes (a scroll, the hero text reflowing) call this for every item.
+        // Only a real move of the focused item touches the ring, and a running ring animation
+        // is re-targeted rather than snapped.
+        if (changed && index == engine.focused.intValue) {
+            if (animJob?.isActive == true && style == FocusStyle.RING) {
+                val dy = if (scrolling) scrollY.floatValue else 0f
+                to[0] = rects[o]; to[1] = rects[o + 1] - dy; to[2] = rects[o + 2]; to[3] = rects[o + 3]
+            } else {
+                placeRing(animate = false)
+            }
+        }
     }
 
     private fun ensureGraph() {
@@ -226,13 +240,17 @@ class FocusScreenState internal constructor(
     internal fun drawRing(scope: androidx.compose.ui.graphics.drawscope.DrawScope, color: Color) {
         if (ringAlpha.floatValue <= 0f) return
         val off = ringOffset + ringStroke / 2f
+        var st = stroke
+        if (st.width != ringStroke) { st = Stroke(width = ringStroke); stroke = st }
         scope.drawRect(
             color = color,
             topLeft = Offset(ringX.floatValue - off, ringY.floatValue - off),
             size = Size(ringW.floatValue + off * 2, ringH.floatValue + off * 2),
-            style = Stroke(width = ringStroke),
+            style = st,
         )
     }
+
+    private var stroke = Stroke(width = 4f)
 }
 
 /** Keys go to the top-most registered screen (panels sit above the screen under them). */
@@ -265,10 +283,12 @@ fun rememberFocusScreen(count: Int, initial: Int = 0, active: Boolean = true): F
 /** Root of a focus screen: draws the single ring layer above its content. */
 @Composable
 fun FocusRoot(state: FocusScreenState, ringColor: Color, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier.drawWithContent {
-        drawContent()
-        state.drawRing(this, ringColor)
-    }) { androidx.compose.runtime.key(state.generation.intValue) { content() } }
+    Box(modifier) {
+        androidx.compose.runtime.key(state.generation.intValue) { content() }
+        // The ring lives in its own layer: moving or animating it re-records only this layer,
+        // never the screen underneath.
+        Spacer(Modifier.matchParentSize().graphicsLayer().drawBehind { state.drawRing(this, ringColor) })
+    }
 }
 
 /** Marks a focusable item (or the part of it the ring should surround). */

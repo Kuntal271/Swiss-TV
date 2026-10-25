@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.swissdark.launcher.core.perf"
     buildFeatures { compose = true }
+    defaultConfig { consumerProguardFiles("consumer-rules.pro") }
 }
 
 dependencies {
@@ -14,5 +15,6 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     api(libs.tracing)
+    implementation(libs.androidx.core)
     implementation(libs.jankstats)
 }

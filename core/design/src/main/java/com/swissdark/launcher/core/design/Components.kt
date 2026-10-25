@@ -34,6 +34,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
@@ -84,6 +89,12 @@ fun T(text: String, style: TextStyle, modifier: Modifier = Modifier, color: Colo
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
     )
+}
+
+/** Text whose colour is read in the draw phase only: a change re-draws, never recomposes or measures. */
+@Composable
+internal fun TDraw(text: String, style: TextStyle, color: ColorProducer, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) {
+    BasicText(text, modifier, style = style, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 
 /** Label 22 caps. */
@@ -177,23 +188,54 @@ fun IconTile(
     scrolling: Boolean = false,
     badge: String? = null,
 ) {
-    val focused by remember(state, index) { state.isFocused(index) }
-    val c = if (focused) Swiss.Focus else Swiss.Ink
+    // Focus is read only while drawing (glyph tint, label colour) inside the tile's own layer:
+    // a D-pad press re-records two small layers and recomposes nothing.
+    val focused = remember(state, index) { state.isFocused(index) }
+    val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
     Column(
         modifier
             .height(height)
             .focusItem(state, index, FocusStyle.RING, scrolling)
+            .graphicsLayer()
             .border(1.dp, Swiss.Track)
             .background(Swiss.TileFill)
             .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Glyph(glyph, iconSize, c)
+            val painter = rememberVectorPainter(Glyphs.get(glyph))
+            Spacer(
+                Modifier.size(iconSize).drawBehind {
+                    with(painter) { draw(size, colorFilter = if (focused.value) FocusTint else InkTint) }
+                },
+            )
             if (badge != null) Label(badge, color = Swiss.Focus, style = SwissType.Label18)
         }
-        T(label, style, color = c, maxLines = 1)
+        TDraw(label, style, color, maxLines = 1)
     }
+}
+
+private val InkTint = ColorFilter.tint(Swiss.Ink)
+private val FocusTint = ColorFilter.tint(Swiss.Focus)
+
+/** Package name to Tabler glyph id (provided by the app from AppGlyphs); unknown apps get the generic glyph. */
+val LocalAppGlyph = staticCompositionLocalOf<(String) -> String> { { "apps" } }
+
+/** Stand-in art for an app without a TV banner: its outline glyph centred on a tile, as in IconTile. */
+@Composable
+fun AppGlyphArt(glyph: String, modifier: Modifier = Modifier) {
+    val painter = rememberVectorPainter(Glyphs.get(glyph))
+    Box(
+        modifier
+            .background(Swiss.TileFill)
+            .border(1.dp, Swiss.Track)
+            .drawBehind {
+                val g = size.minDimension * 0.4f
+                translate((size.width - g) / 2f, (size.height - g) / 2f) {
+                    with(painter) { draw(Size(g, g), colorFilter = InkTint) }
+                }
+            },
+    )
 }
 
 /** Artwork from a URL, a local file, or an app banner ("banner:<package>"). */
@@ -206,7 +248,7 @@ fun Art(key: String?, width: Int, height: Int, modifier: Modifier = Modifier) {
             val pkg = key.removePrefix("banner:")
             val bmp = remember(pkg, width, height) { art?.banner(pkg, width, height)?.asImageBitmap() }
             if (bmp != null) Image(bmp, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop)
-            else Box(modifier.background(Swiss.Placeholder))
+            else AppGlyphArt(LocalAppGlyph.current(pkg), modifier)
         }
         else -> {
             val ctx = LocalContext.current
@@ -237,13 +279,23 @@ fun PosterCard(
     scrolling: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    val focused by remember(state, index) { state.isFocused(index) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
+    // Focus is read only while drawing, inside the card's own layer (see IconTile).
+    val focused = remember(state, index) { state.isFocused(index) }
+    val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
+    Column(modifier.graphicsLayer(), verticalArrangement = Arrangement.spacedBy(gap)) {
         Column(Modifier.fillMaxWidth().focusItem(state, index, FocusStyle.RING, scrolling)) {
             Art(art, decodeW, decodeH, Modifier.fillMaxWidth().height(imageHeight))
-            if (progress != null) ProgressBar(progress, if (focused) Swiss.Focus else Swiss.Ink)
+            if (progress != null) {
+                val f = progress.coerceIn(0f, 1f)
+                Spacer(
+                    Modifier.fillMaxWidth().height(6.dp).drawBehind {
+                        drawRect(Swiss.Track)
+                        drawRect(color(), Offset.Zero, Size(size.width * f, size.height))
+                    },
+                )
+            }
         }
-        T(title, titleStyle, color = if (focused) Swiss.Focus else Swiss.Ink, maxLines = 2)
+        TDraw(title, titleStyle, color, maxLines = 2)
         if (meta != null) T(meta, metaStyle, maxLines = 1)
         extra?.invoke(this)
     }
@@ -289,15 +341,25 @@ fun TabText(
     unselected: Color = Swiss.Muted,
     underline: Dp = 4.dp,
 ) {
-    val focused by remember(state, index) { state.isFocused(index) }
-    val color = when {
-        focused -> Swiss.Focus
-        selected -> Swiss.Ink
-        else -> unselected
+    // Colour and underline are draw-phase reads: focus moving across tabs recomposes nothing.
+    val focused = remember(state, index) { state.isFocused(index) }
+    val color = remember(focused, selected, unselected) {
+        ColorProducer {
+            when {
+                focused.value -> Swiss.Focus
+                selected -> Swiss.Ink
+                else -> unselected
+            }
+        }
     }
-    var m = Modifier.focusItem(state, index, FocusStyle.SELF)
-    if (selected || focused) m = m.bottomRule(underline, if (focused) Swiss.Focus else Swiss.Ink)
-    T(text, style, m.padding(vertical = 4.dp), color, maxLines = 1)
+    val m = Modifier.focusItem(state, index, FocusStyle.SELF).drawBehind {
+        val f = focused.value
+        if (selected || f) {
+            val w = underline.toPx()
+            drawRect(if (f) Swiss.Focus else Swiss.Ink, Offset(0f, size.height - w), Size(size.width, w))
+        }
+    }
+    TDraw(text, style, color, m.padding(vertical = 4.dp), maxLines = 1)
 }
 
 @Composable
@@ -311,25 +373,34 @@ fun PrimaryButton(state: FocusScreenState, index: Int, text: String) {
 
 @Composable
 fun OutlineButton(state: FocusScreenState, index: Int, text: String) {
-    val focused by remember(state, index) { state.isFocused(index) }
-    val c = if (focused) Swiss.Focus else Swiss.Ink
-    T(
-        text, SwissType.Button,
-        Modifier.focusItem(state, index).border(2.dp, c).padding(horizontal = 28.dp, vertical = 20.dp),
-        c, maxLines = 1,
+    val focused = remember(state, index) { state.isFocused(index) }
+    val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
+    TDraw(
+        text, SwissType.Button, color,
+        Modifier.focusItem(state, index).drawBehind { drawInsetBorder(2.dp.toPx(), color()) }.padding(horizontal = 28.dp, vertical = 20.dp),
+        maxLines = 1,
     )
+}
+
+/** Same pixels as Modifier.border(w, c) with a rectangle shape, but the colour is read at draw time. */
+private fun DrawScope.drawInsetBorder(w: Float, c: Color) {
+    drawRect(c, Offset(w / 2f, w / 2f), Size(size.width - w, size.height - w), style = Stroke(w))
 }
 
 @Composable
 fun Chip(state: FocusScreenState, index: Int, text: String) {
-    val focused by remember(state, index) { state.isFocused(index) }
-    val c = if (focused) Swiss.Focus else Swiss.Ink
-    T(
-        text, SwissType.Card24.copy(lineHeight = SwissType.Card24.fontSize),
-        Modifier.focusItem(state, index).border(2.dp, if (focused) Swiss.Focus else Swiss.Rule).padding(horizontal = 22.dp, vertical = 12.dp),
-        c, maxLines = 1,
+    val focused = remember(state, index) { state.isFocused(index) }
+    val color = remember(focused) { ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink } }
+    TDraw(
+        text, ChipStyle, color,
+        Modifier.focusItem(state, index)
+            .drawBehind { drawInsetBorder(2.dp.toPx(), if (focused.value) Swiss.Focus else Swiss.Rule) }
+            .padding(horizontal = 22.dp, vertical = 12.dp),
+        maxLines = 1,
     )
 }
+
+private val ChipStyle = SwissType.Card24.copy(lineHeight = SwissType.Card24.fontSize)
 
 /** Grey square with an initial, for people without a photo. */
 @Composable

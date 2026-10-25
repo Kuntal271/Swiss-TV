@@ -33,15 +33,38 @@ class WallpaperAlarmReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         // An app update unbinds accessibility services; re-enable ours if setup.sh had turned it on.
-        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) reenableFallback(context)
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            reenableFallback(context)
+            reenableMediaListener(context)
+        }
         context.graph.status.checkHome()
     }
 
     companion object {
+        /** An update drops our notification-listener grant (media sessions for Up next); put it back. */
+        fun reenableMediaListener(context: Context) {
+            if (context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+            val me = android.content.ComponentName(context, MediaListenerService::class.java).flattenToString()
+            val cr = context.contentResolver
+            val key = "enabled_notification_listeners"
+            val cur = android.provider.Settings.Secure.getString(cr, key).orEmpty()
+            if (me !in cur.split(':')) {
+                android.provider.Settings.Secure.putString(cr, key, listOf(cur, me).filter { it.isNotEmpty() }.joinToString(":"))
+            }
+        }
+
         fun reenableFallback(context: Context) {
             if (context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
             val prefs = context.getSharedPreferences("fallback", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("wanted", false)) return
+            // Only needed while another Home outranks us. When we hold Home natively the service
+            // just costs every app on the TV accessibility work per frame, so leave it off.
+            val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val home = context.packageManager.resolveActivity(i, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+            if (home == context.packageName) {
+                prefs.edit().putBoolean("wanted", false).apply()
+                return
+            }
             val me = "${context.packageName}/${HomeFallbackService::class.java.name}"
             val cr = context.contentResolver
             val cur = android.provider.Settings.Secure.getString(cr, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
@@ -95,5 +118,16 @@ class HomeFallbackService : AccessibilityService() {
 
     companion object {
         const val GOOGLE_TV = "com.google.android.apps.tv.launcherx"
+    }
+}
+
+/**
+ * Never reads notifications. Being an enabled notification listener is what lets this launcher
+ * see other apps' media sessions (MediaSessionManager.getActiveSessions), which is how Up next
+ * learns what was watched. setup.sh: `cmd notification allow_listener …/.MediaListenerService`.
+ */
+class MediaListenerService : android.service.notification.NotificationListenerService() {
+    override fun onListenerConnected() {
+        graph.watched.start()
     }
 }

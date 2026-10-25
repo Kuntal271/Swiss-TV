@@ -71,9 +71,13 @@ interface LauncherDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putQuery(r: QueryRow)
     @Query("SELECT * FROM queries WHERE `query` = :q AND fetchedAt > :after") suspend fun query(q: String, after: Long): QueryRow?
     @Query("DELETE FROM queries WHERE fetchedAt < :before") suspend fun expireQueries(before: Long)
+    /** Typed search queries (not "~trending/…", "~genre/…" or "~person/…" keys). */
+    @Query("DELETE FROM queries WHERE fetchedAt < :before AND substr(`query`, 1, 1) != '~'") suspend fun expireTypedQueries(before: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putSeen(r: List<SeenRow>)
     @Query("SELECT * FROM seen ORDER BY seenAt DESC LIMIT 1500") suspend fun seen(): List<SeenRow>
+    /** The table otherwise grows with every search; only the newest rows are ever read. */
+    @Query("DELETE FROM seen WHERE `key` NOT IN (SELECT `key` FROM seen ORDER BY seenAt DESC LIMIT :keep)") suspend fun trimSeen(keep: Int)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putHistory(r: HistoryRow)
     @Query("SELECT * FROM history ORDER BY openedAt DESC LIMIT :n") suspend fun history(n: Int): List<HistoryRow>

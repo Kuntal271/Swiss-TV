@@ -78,18 +78,27 @@ class BannerArt(private val context: Context) : AppArt {
     private val cache = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
+    private val noBanner: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     override fun banner(packageName: String, width: Int, height: Int): Bitmap? {
         val key = "$packageName@${width}x$height"
         cache.get(key)?.let { return it }
+        if (packageName in noBanner) return null
         val pm = context.packageManager
+        // Only a real TV banner. No fallback to the launcher icon: for apps without one Android
+        // hands back the default robot, stretched to 16:9. Null lets the UI draw its glyph tile.
         val d: Drawable = try {
-            pm.getApplicationBanner(packageName)
-                ?: pm.getLeanbackLaunchIntentForPackage(packageName)?.let { pm.getActivityBanner(it) }
-                ?: pm.getApplicationIcon(packageName)
+            val app = pm.getApplicationInfo(packageName, 0)
+            val cn = pm.getLeanbackLaunchIntentForPackage(packageName)?.component
+            val activity = cn?.let { runCatching { pm.getActivityInfo(it, 0) }.getOrNull() }
+            when {
+                cn != null && activity != null && activity.banner != 0 -> pm.getActivityBanner(cn)
+                app.banner != 0 -> pm.getApplicationBanner(app)
+                else -> null
+            }
         } catch (_: Exception) {
-            return null
-        }
+            null
+        } ?: run { noBanner += packageName; return null }
         val sw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val c = Canvas(sw)
         val iw = d.intrinsicWidth.takeIf { it > 0 } ?: width
@@ -104,6 +113,11 @@ class BannerArt(private val context: Context) : AppArt {
         cache.put(key, hw)
         return hw
     }
+
+    fun trim() = cache.evictAll()
+
+    /** An app update can add a banner: forget the misses when packages change. */
+    fun forgetMisses() = noBanner.clear()
 }
 
 /** Is this launcher the Home app? The answer a TCL or Google update can silently change. */

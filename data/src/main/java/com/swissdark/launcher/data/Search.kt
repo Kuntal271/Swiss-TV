@@ -27,21 +27,25 @@ class LocalIndex private constructor(
             val mid = (lo + hi) ushr 1
             if (keys[mid] < q) lo = mid + 1 else hi = mid
         }
+        // Scan the whole prefix range: apps sort anywhere in it (e.g. "tv" after 600 "ti…"
+        // titles), so stopping at the first `limit` keys could hide an exact app match.
+        // Each list is capped; the scan stops once both are full.
         val seen = BooleanArray(hits.size)
         val apps = ArrayList<SearchHit>()
         val others = ArrayList<SearchHit>()
         var i = lo
-        while (i < keys.size && keys[i].startsWith(q) && apps.size + others.size < limit) {
+        while (i < keys.size && keys[i].startsWith(q) && (apps.size < limit || others.size < limit)) {
             val t = target[i]
             if (!seen[t]) {
                 seen[t] = true
                 val h = hits[t]
-                if (h is SearchHit.App) apps.add(h) else others.add(h)
+                if (h is SearchHit.App) { if (apps.size < limit) apps.add(h) } else if (others.size < limit) others.add(h)
             }
             i++
         }
         apps.sortBy { (it as SearchHit.App).app.label.length }
-        apps + others
+        if (apps.size + others.size <= limit) apps + others
+        else apps + others.subList(0, (limit - apps.size).coerceAtLeast(0))
     }
 
     companion object {

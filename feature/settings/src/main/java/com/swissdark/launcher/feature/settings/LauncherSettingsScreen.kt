@@ -348,8 +348,8 @@ private fun appsSection(s: LauncherSettings, apps: List<AppEntry>, a: SettingsAc
 
 private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
     Column {
-        InfoRow("Home button", if (info.isHome) "Opens this launcher" else "Google TV — run setup.sh")
-        InfoRow("Hold Home", "Google TV dashboard")
+        InfoRow("Home button", if (info.isHome) "Swiss Home" else "Not set to Swiss Home — run setup.sh")
+        InfoRow("Google TV Home", "Off · UNDO=1 ./setup/setup.sh restores it")
         InfoRow("Mic", "Google Assistant · Search here: Mic")
         InfoRow("Input", "Inputs panel")
         InfoRow("Settings", "Quick settings panel")

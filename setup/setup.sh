@@ -17,6 +17,8 @@ HOME_ACT="$PKG/.MainActivity"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 APK="${APK:-$ROOT/app/build/outputs/apk/release/app-release.apk}"
+# The baseline profile ships as a .dm next to the APK; installing both gives status=speed-profile.
+DM="${DM:-$ROOT/app/build/outputs/apk/release/baselineProfiles/0/app-release.dm}"
 BLOAT="${BLOAT:-com.tcl.exhibit com.tcl.ocean.instructions}"
 # Never touched: Google TV's launcher (profile picker), setup wizard, Play services, TCL's TV input app.
 PROTECTED="com.google.android.apps.tv.launcherx com.google.android.tungsten.setupwraith com.google.android.gms com.tcl.tv com.android.vending"
@@ -50,7 +52,7 @@ if [[ ! -f "$APK" ]]; then
   (cd "$ROOT" && ./gradlew -q :app:assembleRelease)
 fi
 say "Installing $(basename "$APK") ($(du -h "$APK" | cut -f1))"
-adb -s "$S" install -r -g "$APK" >/dev/null
+if [[ -f "$DM" ]]; then adb -s "$S" install-multiple -r -g "$APK" "$DM" >/dev/null; else adb -s "$S" install -r -g "$APK" >/dev/null; fi
 ok "installed $(A dumpsys package $PKG | grep -m1 versionName | xargs)"
 
 say "Permissions"
@@ -59,6 +61,8 @@ A pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null && ok "microphone 
 A pm grant "$PKG" android.permission.WRITE_SECURE_SETTINGS 2>/dev/null && ok "secure settings (keeps the Home fallback on across updates)" || warn "secure settings grant refused: re-run setup after each update"
 A pm grant "$PKG" android.permission.ACCESS_FINE_LOCATION 2>/dev/null && ok "location (Wi-Fi name only)" || warn "location grant refused"
 if A pm grant "$PKG" com.android.providers.tv.permission.READ_EPG_DATA 2>/dev/null; then ok "Watch Next read permission"; else warn "Watch Next permission is system-only here: Up next uses the launcher's own history"; fi
+# Up next: a notification listener may read media sessions (what is playing, how far in). It reads no notifications.
+if A cmd notification allow_listener "$PKG/$PKG.MediaListenerService" 2>&1 | grep -qiE "error|exception|not allowed"; then warn "media-session access refused: Up next only shows titles opened from Search"; else ok "media sessions (Up next: what you watched)"; fi
 
 say "First start (creates the app's folders)"
 A am start -W -n "$HOME_ACT" >/dev/null
@@ -98,8 +102,8 @@ if [[ -n "$BLOAT" ]]; then
   done
 fi
 
-say "Compiling the Home path ahead of time (speed-profile)"
-A cmd package compile -m speed-profile -f "$PKG" >/dev/null && ok "compiled"
+say "Compiling ahead of time (speed)"
+A cmd package compile -m speed -f "$PKG" >/dev/null && ok "compiled (speed: measured 406 ms cold vs 552 ms speed-profile)"
 
 say "Setting Home"
 # Google TV Home outranks any third-party Home, and the setup wizard's RecoveryActivity

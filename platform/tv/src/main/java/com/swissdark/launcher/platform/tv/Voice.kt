@@ -29,11 +29,15 @@ class VoiceAdapter(private val context: Context) {
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
-            override fun onError(error: Int) = onEnd(error)
+            override fun onError(error: Int) {
+                release(r)
+                onEnd(error)
+            }
             override fun onPartialResults(partialResults: Bundle?) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let(onPartial)
             }
             override fun onResults(results: Bundle?) {
+                release(r)
                 results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let(onFinal)
                 onEnd(null)
             }
@@ -43,6 +47,12 @@ class VoiceAdapter(private val context: Context) {
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true),
         )
+    }
+
+    /** A finished session unbinds from the recognition service right away, not at the next listen. */
+    private fun release(r: SpeechRecognizer) {
+        if (recognizer === r) recognizer = null
+        r.destroy()
     }
 
     fun stop() {

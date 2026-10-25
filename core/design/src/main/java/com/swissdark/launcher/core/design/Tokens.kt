@@ -2,6 +2,9 @@ package com.swissdark.launcher.core.design
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
+import com.swissdark.launcher.core.perf.SemanticsGate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -45,5 +48,10 @@ fun DesignCanvas(content: @Composable () -> Unit) {
     val physical = LocalDensity.current
     val widthPx = cfg.screenWidthDp * physical.density
     val density = Density(widthPx / Swiss.CANVAS_W, 1f)
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val detach = SemanticsGate.attach(view)
+        onDispose { detach() }
+    }
     CompositionLocalProvider(LocalDensity provides density, content = content)
 }

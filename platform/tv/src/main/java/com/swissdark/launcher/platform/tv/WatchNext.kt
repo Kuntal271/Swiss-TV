@@ -3,6 +3,7 @@ package com.swissdark.launcher.platform.tv
 import android.content.Context
 import android.database.ContentObserver
 import android.media.tv.TvContract
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 
@@ -21,8 +22,11 @@ data class WatchNextRow(
 )
 
 /**
- * TvContract.WatchNextPrograms. Many Google TV builds only return the caller's own rows,
- * so an empty or refused read means "closed to us" and Home falls back to our own history.
+ * TvContract.WatchNextPrograms. TvProvider returns only the caller's own rows unless it holds
+ * the signature permission ACCESS_ALL_EPG_DATA, so for a sideloaded launcher Watch Next is
+ * system-only. Once that is established the adapter stops querying and stops observing: every
+ * app that updates its Watch Next row (YouTube does so during playback) would otherwise wake
+ * the launcher and rebuild Home for nothing. Home falls back to its own history.
  */
 class WatchNextAdapter(private val context: Context) {
     sealed interface Result {
@@ -30,7 +34,36 @@ class WatchNextAdapter(private val context: Context) {
         data class Closed(val why: String) : Result
     }
 
+    private val main = Handler(Looper.getMainLooper())
+    private val allEpg: Boolean by lazy {
+        context.checkSelfPermission(ACCESS_ALL_EPG_DATA) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /** Set once reading is known to be pointless for this process's lifetime. */
+    @Volatile private var closedFor: String? = null
+    @Volatile private var observer: ContentObserver? = null
+
     fun read(limit: Int = 12): Result {
+        closedFor?.let { return Result.Closed(it) }
+        val r = query(limit)
+        if (r is Result.Closed) {
+            // Refused or missing provider: never going to work. Empty without the system
+            // permission: only our own rows are visible, and we publish none.
+            val permanent = r.why.startsWith("security") || r.why == "no provider" || (r.why == "empty" && !allEpg)
+            if (permanent) close(if (r.why == "empty") "system-only (empty, no ACCESS_ALL_EPG_DATA)" else r.why)
+        }
+        return r
+    }
+
+    private fun close(why: String) {
+        closedFor = why
+        main.post {
+            observer?.let { runCatching { context.contentResolver.unregisterContentObserver(it) } }
+            observer = null
+        }
+    }
+
+    private fun query(limit: Int): Result {
         val p = TvContract.WatchNextPrograms.COLUMN_PACKAGE_NAME
         val cols = arrayOf(
             TvContract.WatchNextPrograms._ID,
@@ -76,15 +109,32 @@ class WatchNextAdapter(private val context: Context) {
         }
     }
 
+    /**
+     * Change notifications, coalesced to one call per second (apps update progress rows in
+     * bursts). Not registered, or unregistered later, once Watch Next is known to be closed.
+     */
     fun observe(onChange: () -> Unit): ContentObserver? {
-        val o = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) = onChange()
+        if (closedFor != null) return null
+        val fire = Runnable { if (closedFor == null) onChange() }
+        val o = object : ContentObserver(main) {
+            override fun onChange(selfChange: Boolean) {
+                if (closedFor != null) { close(closedFor!!); return }
+                main.removeCallbacks(fire)
+                main.postDelayed(fire, 1_000)
+            }
         }
         return try {
             context.contentResolver.registerContentObserver(TvContract.WatchNextPrograms.CONTENT_URI, true, o)
+            observer = o
+            // A read may have closed the adapter while we registered.
+            if (closedFor != null) close(closedFor!!)
             o
         } catch (_: Exception) {
             null
         }
+    }
+
+    companion object {
+        const val ACCESS_ALL_EPG_DATA = "com.android.providers.tv.permission.ACCESS_ALL_EPG_DATA"
     }
 }

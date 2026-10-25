@@ -42,6 +42,7 @@ import com.swissdark.launcher.domain.PreparedWallpaper
 import com.swissdark.launcher.domain.TimeSlot
 import com.swissdark.launcher.domain.hero
 import androidx.compose.foundation.layout.padding
+import com.swissdark.launcher.domain.ContinueSource
 
 @Immutable
 class HomeActions(
@@ -134,7 +135,7 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                     Column(Modifier.width(Swiss.span(7)), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Label("Up next")
                         if (up.isEmpty()) {
-                            T("Nothing to continue yet. Titles you open from Search show up here.", SwissType.Body22, Modifier.padding(vertical = 60.dp))
+                            T("Nothing to continue yet — start something and it’ll appear here.", SwissType.Body22, Modifier.padding(vertical = 60.dp))
                         } else Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                             for ((i, item) in up.withIndex()) {
                                 PosterCard(
@@ -150,7 +151,7 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                         AppsGrid(focus, apps, nUp)
                     }
                 }
-                Footer(focus, nUp + nApps, status.hint)
+                Footer(focus, nUp + nApps, status.hint, up, apps)
             }
         }
     }
@@ -193,9 +194,15 @@ private fun AppsGrid(focus: com.swissdark.launcher.core.focus.FocusScreenState, 
 }
 
 @Composable
-private fun Footer(focus: com.swissdark.launcher.core.focus.FocusScreenState, base: Int, hint: String) {
+private fun Footer(
+    focus: com.swissdark.launcher.core.focus.FocusScreenState,
+    base: Int,
+    hint: String,
+    up: List<ContinueItem>,
+    apps: List<AppEntry>,
+) {
     Row(Modifier.fillMaxWidth().topRule().padding(top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-        T(hint, SwissType.Footer, Modifier.weight(1f), Swiss.Muted, maxLines = 1)
+        FooterHint(focus, hint, up, apps, Modifier.weight(1f))
         Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
             for ((k, l) in links.withIndex()) {
                 TabText(focus, base + k, l, selected = false, style = SwissType.Footer, unselected = Swiss.Ink, underline = 3.dp)
@@ -208,4 +215,37 @@ private fun caption(w: PreparedWallpaper): String {
     val slot: TimeSlot = w.slot
     val name = w.wallpaper?.name ?: "No wallpaper yet — run setup.sh"
     return "${slot.label} ${slot.range} · $name" + if (w.wallpaper?.is4k == true) " · 4K" else ""
+}
+
+/** An Up next entry that is just an app (no title, no deep link): OK opens the app itself. */
+fun ContinueItem.isAppOnly(): Boolean = source == ContinueSource.APP || (title == null && intentUri == null)
+
+/** Reads focus in its own scope, so a key press recomposes only this line. */
+@Composable
+private fun FooterHint(
+    focus: com.swissdark.launcher.core.focus.FocusScreenState,
+    hint: String,
+    up: List<ContinueItem>,
+    apps: List<AppEntry>,
+    modifier: Modifier,
+) {
+    val text = if (hint.isEmpty()) "" else footerHint(focus.engine.focused.intValue, up, apps, hint)
+    T(text, SwissType.Footer, modifier, Swiss.Muted, maxLines = 1)
+}
+
+/** The footer says what OK and Hold OK do on whatever is focused. */
+private fun footerHint(i: Int, up: List<ContinueItem>, apps: List<AppEntry>, fallback: String): String {
+    val nUp = up.size
+    return when {
+        i < nUp -> {
+            val item = up[i]
+            if (item.isAppOnly()) "OK opens ${item.serviceName} · Hold OK to remove it from Up next"
+            else "OK for details and resume · Hold OK to remove it from Up next"
+        }
+        i < nUp + apps.size -> {
+            val a = apps[i - nUp]
+            "OK opens ${a.label} · Hold OK to ${if (a.pinned) "unpin it" else "pin it here"}"
+        }
+        else -> fallback
+    }
 }

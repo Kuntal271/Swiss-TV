@@ -24,27 +24,63 @@ class HabitStore(context: Context) {
     private var buckets = Array(0) { FloatArray(HOURS) }
     private val lastUsed = HashMap<String, Long>()
     private var lastDecayDay = 0L
-    var seeded = false
-        private set
+    private var dirty = false
 
-    init {
-        load()
+    /** Launches this launcher started itself (recorded directly), to skip their UsageStats echo. */
+    private val directPkg = arrayOfNulls<String>(DIRECT_RING)
+    private val directAt = LongArray(DIRECT_RING)
+    private var directNext = 0
+
+    private var seededFlag = false
+    val seeded: Boolean get() = synchronized(this) { ensureLoaded(); seededFlag }
+
+    // The file is read on first use (a background thread), not in the constructor, which runs
+    // on the main thread while Home composes its first frame.
+    private var loaded = false
+
+    private fun ensureLoaded() {
+        if (!loaded) { loaded = true; load() }
     }
 
+    /** A launch made from this launcher: counted now, and remembered so [ingest] skips its echo. */
     @Synchronized
     fun record(pkg: String, timeMillis: Long) {
+        ensureLoaded()
+        add(pkg, timeMillis)
+        directPkg[directNext] = pkg
+        directAt[directNext] = timeMillis
+        directNext = (directNext + 1) % DIRECT_RING
+    }
+
+    /**
+     * A foreground event from UsageStats. Launches started from this launcher were already
+     * counted by [record]; their ACTIVITY_RESUMED event follows within a few seconds and is
+     * skipped here, so those apps do not count twice.
+     */
+    @Synchronized
+    fun ingest(pkg: String, timeMillis: Long) {
+        ensureLoaded()
+        for (k in 0 until DIRECT_RING) {
+            if (directPkg[k] == pkg && timeMillis - directAt[k] in -2_000L..ECHO_MS) return
+        }
+        add(pkg, timeMillis)
+    }
+
+    private fun add(pkg: String, timeMillis: Long) {
         val i = slot(pkg)
         buckets[i][hourOfWeek(timeMillis)] += 1f
         val prev = lastUsed[pkg] ?: 0L
         if (timeMillis > prev) lastUsed[pkg] = timeMillis
+        dirty = true
     }
 
     @Synchronized
-    fun lastUsed(pkg: String): Long = lastUsed[pkg] ?: 0L
+    fun lastUsed(pkg: String): Long { ensureLoaded(); return lastUsed[pkg] ?: 0L }
 
     /** Applies the daily 0.97 decay for every day since the last one. */
     @Synchronized
     fun decay(nowMillis: Long) {
+        ensureLoaded()
         val day = nowMillis / DAY_MS
         if (lastDecayDay == 0L) {
             lastDecayDay = day; return
@@ -54,13 +90,15 @@ class HabitStore(context: Context) {
         val f = Math.pow(0.97, days.toDouble()).toFloat()
         for (b in buckets) for (h in 0 until HOURS) b[h] *= f
         lastDecayDay = day
+        dirty = true
     }
 
     @Synchronized
-    fun score(pkg: String, nowMillis: Long): Float {
+    fun score(pkg: String, nowMillis: Long): Float { ensureLoaded(); return score(pkg, nowMillis, hourOfWeek(nowMillis)) }
+
+    private fun score(pkg: String, nowMillis: Long, h: Int): Float {
         val i = index[pkg] ?: return recency(pkg, nowMillis) * 0.15f
         val b = buckets[i]
-        val h = hourOfWeek(nowMillis)
         val prev = b[(h + HOURS - 1) % HOURS]
         val next = b[(h + 1) % HOURS]
         return 0.6f * b[h] + 0.25f * 0.5f * (prev + next) + 0.15f * recency(pkg, nowMillis)
@@ -69,8 +107,12 @@ class HabitStore(context: Context) {
     /** Ranks packages for "now": pinned first (in pinned order), then by score. */
     fun rank(pkgs: List<String>, pinned: List<String>, nowMillis: Long): List<String> = traced(Sections.HABIT_RANK) {
         val pinnedSet = pinned.toHashSet()
-        val head = pinned.filter { it in pkgs }
-        val rest = pkgs.filter { it !in pinnedSet }.sortedByDescending { score(it, nowMillis) }
+        val present = pkgs.toHashSet()
+        val head = pinned.filter { it in present }
+        // Score each package once (not once per comparison), under one lock, for one hour slot.
+        val h = hourOfWeek(nowMillis)
+        val scores = synchronized(this) { ensureLoaded(); pkgs.associateWith { score(it, nowMillis, h) } }
+        val rest = pkgs.filter { it !in pinnedSet }.sortedByDescending { scores[it] }
         head + rest
     }
 
@@ -87,6 +129,7 @@ class HabitStore(context: Context) {
     /** First run: replay the last 30 days of usage so habits are useful from day one. */
     @Synchronized
     fun seed(launches: List<Pair<String, Long>>) {
+        ensureLoaded()
         val now = System.currentTimeMillis()
         for ((pkg, t) in launches) {
             val ageDays = ((now - t) / DAY_MS).toInt()
@@ -95,7 +138,8 @@ class HabitStore(context: Context) {
             if (t > (lastUsed[pkg] ?: 0L)) lastUsed[pkg] = t
         }
         lastDecayDay = now / DAY_MS
-        seeded = true
+        seededFlag = true
+        dirty = true
     }
 
     private fun slot(pkg: String): Int = index.getOrPut(pkg) {
@@ -104,21 +148,28 @@ class HabitStore(context: Context) {
         names.size - 1
     }
 
+    /** Writes the file only when something changed since the last save. Never throws. */
     @Synchronized
     fun save() {
+        ensureLoaded()
+        if (!dirty) return
         val tmp = File(file.parentFile, file.name + ".tmp")
-        DataOutputStream(tmp.outputStream().buffered()).use { out ->
-            out.writeInt(VERSION)
-            out.writeLong(lastDecayDay)
-            out.writeBoolean(seeded)
-            out.writeInt(names.size)
-            for ((i, n) in names.withIndex()) {
-                out.writeUTF(n)
-                out.writeLong(lastUsed[n] ?: 0L)
-                for (v in buckets[i]) out.writeFloat(v)
+        try {
+            DataOutputStream(tmp.outputStream().buffered()).use { out ->
+                out.writeInt(VERSION)
+                out.writeLong(lastDecayDay)
+                out.writeBoolean(seededFlag)
+                out.writeInt(names.size)
+                for ((i, n) in names.withIndex()) {
+                    out.writeUTF(n)
+                    out.writeLong(lastUsed[n] ?: 0L)
+                    for (v in buckets[i]) out.writeFloat(v)
+                }
             }
+            if (tmp.renameTo(file)) dirty = false
+        } catch (_: java.io.IOException) {
+            // Disk full or similar: keep the in-memory copy and try again on the next save.
         }
-        tmp.renameTo(file)
     }
 
     private fun load() {
@@ -127,7 +178,7 @@ class HabitStore(context: Context) {
             DataInputStream(file.inputStream().buffered()).use { inp ->
                 if (inp.readInt() != VERSION) return
                 lastDecayDay = inp.readLong()
-                seeded = inp.readBoolean()
+                seededFlag = inp.readBoolean()
                 val n = inp.readInt()
                 val b = ArrayList<FloatArray>(n)
                 repeat(n) { i ->
@@ -139,7 +190,7 @@ class HabitStore(context: Context) {
                 buckets = b.toTypedArray()
             }
         } catch (_: Exception) {
-            names.clear(); index.clear(); buckets = Array(0) { FloatArray(HOURS) }
+            names.clear(); index.clear(); lastUsed.clear(); seededFlag = false; buckets = Array(0) { FloatArray(HOURS) }
         }
     }
 
@@ -148,6 +199,8 @@ class HabitStore(context: Context) {
         private const val VERSION = 1
         private const val HOUR_MS = 3_600_000L
         private const val DAY_MS = 86_400_000L
+        private const val DIRECT_RING = 16
+        private const val ECHO_MS = 15_000L
 
         fun hourOfWeek(millis: Long): Int {
             val t = LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())

@@ -95,6 +95,7 @@ fun UpNextTitleScreen(
                                 item.season != null && item.episode != null -> "Season ${item.season} · Episode ${item.episode}"
                                 item.title?.type == MediaType.MOVIE -> "Film"
                                 item.title?.type == MediaType.TV -> "Series"
+                                item.source == com.swissdark.launcher.domain.ContinueSource.WATCHED -> "Continue watching"
                                 else -> "Last used"
                             }
                             Label(label, color = Swiss.Focus)
@@ -129,13 +130,23 @@ fun UpNextTitleScreen(
                             }
                         }
                     }
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                        Art(details?.backdropUrl ?: item.artKey, 1060, 760, Modifier.fillMaxSize())
+                    val backdrop = details?.backdropUrl
+                    if (backdrop == null && item.artKey.startsWith("banner:")) {
+                        // A 320 × 180 app banner blown up to 1060 × 760 looks broken: show it at banner
+                        // proportions on a panel instead.
+                        Box(
+                            Modifier.weight(1f).fillMaxHeight().background(Swiss.Panel).border(2.dp, Swiss.Rule),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Art(item.artKey, 640, 360, Modifier.size(640.dp, 360.dp))
+                        }
+                    } else Box(Modifier.weight(1f).fillMaxHeight()) {
+                        Art(backdrop ?: item.artKey, 1060, 760, Modifier.fillMaxSize())
                     }
                 }
                 Footer(
                     "If ${item.serviceName} can’t open the ${if (item.title?.type == MediaType.TV || item.season != null) "episode" else "title"} directly, the app opens instead",
-                    listOf(KeyHint("OK", "Resume"), KeyHint("Back", "Home")),
+                    listOf(KeyHint("OK", if (item.progress != null) "Resume" else "Open"), KeyHint("Back", "Home")),
                 )
             }
         }

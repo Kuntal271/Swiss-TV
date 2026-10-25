@@ -50,7 +50,7 @@ enum class MediaType { MOVIE, TV }
 data class TitleRef(val tmdbId: Int, val type: MediaType, val name: String)
 
 @Serializable
-enum class ContinueSource { WATCH_NEXT, HISTORY, APP }
+enum class ContinueSource { WATCH_NEXT, HISTORY, APP, WATCHED }
 
 @Immutable
 @Serializable
@@ -68,6 +68,7 @@ data class ContinueItem(
     val season: Int? = null,
     val episode: Int? = null,
     val minutesLeft: Int? = null,
+    val subtitle: String? = null,       // WATCHED: episode name (or the YouTube channel)
 )
 
 @Immutable
@@ -207,12 +208,13 @@ fun ContinueItem.hero(): HeroInfo {
         ContinueSource.WATCH_NEXT -> "Continue · $serviceName"
         ContinueSource.HISTORY -> "Back to · $serviceName"
         ContinueSource.APP -> "Last used"
+        ContinueSource.WATCHED -> "Continue · $serviceName"
     }
     val left = minutesLeft
     val meta = when {
         season != null && episode != null -> "Season $season · Episode $episode" + (left?.let { " · ${durationText(it)} left" } ?: "")
         left != null -> "${durationText(left)} left"
         else -> this.meta
-    }
+    }.let { m -> if (source == ContinueSource.WATCHED && subtitle != null) "$subtitle · $m" else m }
     return HeroInfo(label, name, meta, progress)
 }

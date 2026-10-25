@@ -19,13 +19,26 @@ class DailyRefreshWorker(context: Context, params: WorkerParameters) : Coroutine
             g.search.trending(daily = false)
             g.search.trending(daily = true)
             Result.success()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {
-            Result.retry()
+            // TMDB down or no route: a couple of retries, then wait for tomorrow's run instead
+            // of backing off for hours (each retry is a wakeup with the network up).
+            if (runAttemptCount < 2) Result.retry() else Result.success()
         }
     }
 
     companion object {
+        /**
+         * Called from startBackground on the main thread: WorkManager's first getInstance
+         * opens its database and schedulers, so do it on a background thread.
+         */
         fun schedule(context: Context) {
+            val app = context.applicationContext
+            kotlin.concurrent.thread(name = "work-schedule", isDaemon = true) { runCatching { enqueue(app) } }
+        }
+
+        private fun enqueue(context: Context) {
             val req = PeriodicWorkRequestBuilder<DailyRefreshWorker>(1, TimeUnit.DAYS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
                 .build()

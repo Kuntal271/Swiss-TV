@@ -1,5 +1,6 @@
 package com.swissdark.launcher.platform.tv
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -17,6 +18,8 @@ class NetworkAdapter(private val context: Context) {
     val status: StateFlow<String> = _status
     val name: StateFlow<String> = _name
 
+    // ACCESS_NETWORK_STATE is declared in the app manifest; this library module has none.
+    @SuppressLint("MissingPermission")
     fun start() {
         update(cm.getNetworkCapabilities(cm.activeNetwork))
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {

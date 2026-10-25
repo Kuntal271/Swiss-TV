@@ -24,7 +24,6 @@ import com.swissdark.launcher.core.perf.LatencyOverlay
 import com.swissdark.launcher.data.DataGraph
 import com.swissdark.launcher.domain.Availability
 import com.swissdark.launcher.domain.ContinueItem
-import com.swissdark.launcher.domain.ContinueSource
 import com.swissdark.launcher.domain.LaunchResult
 import com.swissdark.launcher.domain.Providers
 import com.swissdark.launcher.domain.RefreshReason
@@ -36,6 +35,7 @@ import com.swissdark.launcher.feature.apps.AllAppsScreen
 import com.swissdark.launcher.feature.home.HomeActions
 import com.swissdark.launcher.feature.home.HomeScreen
 import com.swissdark.launcher.feature.home.HomeStatus
+import com.swissdark.launcher.feature.home.isAppOnly
 import com.swissdark.launcher.feature.panels.InputsActions
 import com.swissdark.launcher.feature.panels.InputsPanel
 import com.swissdark.launcher.feature.panels.QuickActions
@@ -89,12 +89,17 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (top == Route.Home) 1f else 0f }) {
             HomeScreen(
                 snapshot, wallpaper,
-                HomeStatus(device, network, isHome, settings.lastInput ?: "Home", if (top == Route.Home) "Hold OK to remove a card or pin an app · Hold Home for Google TV" else ""),
+                HomeStatus(device, network, isHome, settings.lastInput ?: "Home", if (top == Route.Home) "Hold OK to remove a card or pin an app" else ""),
                 remember {
                     HomeActions(
                         openItem = { item ->
-                            val list = g.home.snapshot.value.upNext
-                            activity.push(Route.UpNext(item, list.indexOf(item).coerceAtLeast(0), list.size))
+                            if (item.isAppOnly()) {
+                                // Nothing to show about a bare app: open it, like an app tile does.
+                                report(g.launcher.launch(item.service), item.serviceName)
+                            } else {
+                                val list = g.home.snapshot.value.upNext
+                                activity.push(Route.UpNext(item, list.indexOf(item).coerceAtLeast(0), list.size))
+                            }
                         },
                         removeItem = { g.home.removeFromUpNext(it) },
                         launchApp = { report(g.launcher.launch(it.id), it.label) },
@@ -153,7 +158,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                     item, r.position, r.total, details, device,
                     UpNextActions(
                         resume = {
-                            val res = if (item.source == ContinueSource.APP || item.title == null && item.intentUri == null) g.launcher.launch(item.service)
+                            val res = if (item.isAppOnly()) g.launcher.launch(item.service)
                             else g.launcher.openTitle(item.title ?: TitleRef(0, com.swissdark.launcher.domain.MediaType.TV, item.name), item.service, item.intentUri)
                             report(res, item.serviceName)
                         },

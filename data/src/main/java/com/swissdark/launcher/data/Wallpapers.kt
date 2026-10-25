@@ -235,6 +235,9 @@ class WallpaperSchedulerImpl(
         return b.copy(Bitmap.Config.HARDWARE, false)?.also { b.recycle() } ?: b
     }
 
+    /** Thumbnails are only for the Settings picker: drop them when Home is hidden. */
+    fun trim() = thumbs.evictAll()
+
     fun photosDir(): File? = context.getExternalFilesDir("photos")
 
     // ---- alarm: wakes a killed process 5 min early ----
