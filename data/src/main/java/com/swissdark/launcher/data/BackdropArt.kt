@@ -59,7 +59,7 @@ class BackdropArt(
 ) {
     private val io = Dispatchers.IO.limitedParallelism(1)
     private val prefs = context.getSharedPreferences("backdrops2", Context.MODE_PRIVATE)  // v2: misses from before web lookup are retried
-    private val cache = LruCache<String, PreparedBackdrop>(3)
+    private val cache = LruCache<String, PreparedBackdrop>(4)
     private val lock = Mutex()
 
     /** Prepared backdrop for [item], or null when nothing usable exists. Never throws. */
@@ -321,7 +321,21 @@ class BackdropArt(
     }
 
     private fun finish(sw: Bitmap, d: Float): Bitmap {
-        Canvas(sw).drawColor(android.graphics.Color.argb((d * 255).toInt(), 0, 0, 0), PorterDuff.Mode.SRC_OVER)
+        val c = Canvas(sw)
+        c.drawColor(android.graphics.Color.argb((d * 255).toInt(), 0, 0, 0), PorterDuff.Mode.SRC_OVER)
+        // The readability shades live in the picture itself (they fade with it), so the TV's GPU
+        // draws no extra full-screen gradients while the art cross-fades (it is a 4K panel).
+        val w = sw.width.toFloat(); val h = sw.height.toFloat()
+        fun black(a: Float) = android.graphics.Color.argb((a * 255).toInt(), 0, 0, 0)
+        c.drawRect(0f, 0f, w, h, Paint().apply {
+            shader = android.graphics.LinearGradient(
+                0f, 0f, w, 0f, intArrayOf(black(0.72f), black(0.27f), black(0.28f), black(0.55f)),
+                floatArrayOf(0f, 0.55f, 0.75f, 1f), android.graphics.Shader.TileMode.CLAMP,
+            )
+        })
+        c.drawRect(0f, h * 0.45f, w, h, Paint().apply {
+            shader = android.graphics.LinearGradient(0f, h * 0.45f, 0f, h, black(0f), black(0.78f), android.graphics.Shader.TileMode.CLAMP)
+        })
         val hw = sw.copy(Bitmap.Config.HARDWARE, false)
         if (hw != null) sw.recycle()
         return hw ?: sw

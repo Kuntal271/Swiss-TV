@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import kotlinx.coroutines.launch
 import android.graphics.Bitmap
 import android.view.accessibility.AccessibilityEvent
 import com.swissdark.launcher.data.DataGraph
@@ -108,6 +109,17 @@ class DebugScreenOffReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val pending = goAsync()
         context.graph.clearContinue("debug", force = intent.getBooleanExtra("force", false)) { pending.finish() }
+    }
+}
+
+/** Test hook: three demo Continue watching cards (`--ez remove true` takes them away again). DUMP-protected. */
+class DebugSeedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val pending = goAsync()
+        val remove = intent.getBooleanExtra("remove", false)
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try { context.graph.watched.seedDemo(remove) } finally { pending.finish() }
+        }
     }
 }
 

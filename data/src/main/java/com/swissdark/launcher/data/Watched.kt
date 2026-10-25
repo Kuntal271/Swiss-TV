@@ -209,6 +209,21 @@ class WatchedStore(
         onChanged()
     }
 
+    /** Test hook (DEBUG_SEED): three demo cards, or remove them again. Demo keys start with "demo". */
+    suspend fun seedDemo(remove: Boolean) = withContext(writer) {
+        val now = System.currentTimeMillis()
+        val rows = listOf(
+            WatchedRow("$CRUNCHYROLL|demo1", CRUNCHYROLL, "Day of Atonement", null, 2, 4, true, 600_000, 1_420_000,
+                "https://static.tvmaze.com/uploads/images/original_untouched/647/1619129.jpg", null, now, tmdbTried = true),
+            WatchedRow("$YOUTUBE|demo2", YOUTUBE, "Demo video", "Demo channel", null, null, false, 300_000, 900_000,
+                "https://i.ytimg.com/vi/aqz-KE-bpKQ/hq720.jpg", null, now - 1000, tmdbTried = true),
+            WatchedRow("com.sonyliv|demo3", "com.sonyliv", "Demo show", "Episode 3", 1, 3, true, 900_000, 2_400_000,
+                "https://static.tvmaze.com/uploads/images/original_untouched/647/1619129.jpg", null, now - 2000, tmdbTried = true),
+        )
+        for (r in rows) if (remove) { db.dao().delete(r.key); known.remove(r.key) } else { db.dao().put(r); known[r.key] = r }
+        onChanged()
+    }
+
     fun delete(key: String) {
         known.remove(key)
         scope.launch(writer) { db.dao().delete(key) }

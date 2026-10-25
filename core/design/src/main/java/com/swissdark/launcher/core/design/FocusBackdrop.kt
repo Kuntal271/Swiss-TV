@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.swissdark.launcher.domain.PreparedWallpaper
@@ -32,10 +31,10 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
-/** Cross-fade of the title art; the incoming art also settles from 1.06x to 1x over it. */
-const val FOCUS_BACKDROP_MS = 450
+/** Cross-fade of the title art. */
+const val FOCUS_BACKDROP_MS = 300
 /** Focus must rest this long on a card before its art is loaded/shown. */
-const val FOCUS_BACKDROP_DEBOUNCE_MS = 150L
+const val FOCUS_BACKDROP_DEBOUNCE_MS = 90L
 
 /**
  * The wallpaper, with the focused title's art cross-faded over it ([focusedArt] null = wallpaper).
@@ -83,32 +82,17 @@ fun FocusBackdrop(
                 val dst = IntSize(size.width.toInt(), size.height.toInt())
                 val t = layers.t.value
                 layers.prev.value?.let { b ->
-                    val a = layers.prevFrom * (1f - t)
+                    // Stays fully opaque under the incoming art: fading both would let the wallpaper
+                    // bleed through half-way (the haze); the new art simply dissolves in over the old.
+                    val a = if (layers.cur.value != null) layers.prevFrom else layers.prevFrom * (1f - t)
                     if (a > 0f) drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = a, filterQuality = FilterQuality.Low)
                 }
                 layers.cur.value?.let { b ->
-                    // The new art eases in from slightly zoomed, so a change feels like a camera settling.
-                    if (t > 0f) scale(1f + 0.06f * (1f - t), androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)) {
-                        drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = t, filterQuality = FilterQuality.Low)
-                    }
+                    if (t > 0f) drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = t, filterQuality = FilterQuality.Low)
                 }
-                // Title art is brighter than our wallpapers: shade the left (clock, hero) and the
-                // bottom (rows, key hints) so text stays readable, fading with the art itself.
-                val art = layers.art()
-                // One horizontal shade (left for the clock and hero, right for the apps block) and
-                // one bottom shade (rows, key hints; always at least [baseScrim]). Both rects are
-                // bounded to where they shade, to keep the GPU fill low while the art cross-fades.
-                if (art > 0f) {
-                    drawRect(
-                        androidx.compose.ui.graphics.Brush.horizontalGradient(
-                            0f to Color.Black.copy(alpha = 0.72f * art),
-                            0.55f to Color.Black.copy(alpha = 0.27f * art),
-                            0.75f to Color.Black.copy(alpha = 0.28f * art),
-                            1f to Color.Black.copy(alpha = 0.55f * art),
-                        ),
-                    )
-                }
-                val bottom = maxOf(baseScrim, 0.78f * art)
+                // The art carries its own shades (baked in by BackdropArt); only the wallpaper's
+                // light bottom shade is drawn here, fading out as the art comes in.
+                val bottom = baseScrim * (1f - layers.art())
                 if (bottom > 0f) {
                     val top = size.height * 0.45f
                     drawRect(
@@ -146,7 +130,7 @@ internal class FadeLayers {
 /**
  * Art for the focused item of [items] (focus index in [focused]; indices ≥ items.size are not
  * items, e.g. app tiles and links → null). Debounced by [FOCUS_BACKDROP_DEBOUNCE_MS]; loads run
- * through [load] (suspending, off main, cached by the provider). The first item is prefetched.
+ * through [load] (suspending, off main, cached by the provider). The first few items are prefetched.
  */
 @Composable
 fun <T> rememberFocusedArt(focused: IntState, items: List<T>, load: (suspend (T) -> Bitmap?)?): State<ImageBitmap?> {
@@ -154,9 +138,9 @@ fun <T> rememberFocusedArt(focused: IntState, items: List<T>, load: (suspend (T)
     val last = remember { arrayOfNulls<Bitmap>(1) }
     val loader by rememberUpdatedState(load)
     val list by rememberUpdatedState(items)
-    LaunchedEffect(items.firstOrNull()) {
-        val first = items.firstOrNull() ?: return@LaunchedEffect
-        launch { runCatching { loader?.invoke(first) } }
+    // Every card's art is prepared up front (a few at most), so moving focus only swaps pictures.
+    LaunchedEffect(items) {
+        for (it in items.take(4)) runCatching { loader?.invoke(it) }
     }
     LaunchedEffect(Unit) {
         snapshotFlow { focused.intValue to list }.distinctUntilChanged().collectLatest { (i, l) ->
