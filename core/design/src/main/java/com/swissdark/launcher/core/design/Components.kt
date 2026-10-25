@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -97,7 +98,7 @@ fun T(text: String, style: TextStyle, modifier: Modifier = Modifier, color: Colo
 
 /** Text whose colour is read in the draw phase only: a change re-draws, never recomposes or measures. */
 @Composable
-internal fun TDraw(text: String, style: TextStyle, color: ColorProducer, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) {
+fun TDraw(text: String, style: TextStyle, color: ColorProducer, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) {
     BasicText(text, modifier, style = style, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 
@@ -109,22 +110,31 @@ fun Label(text: String, modifier: Modifier = Modifier, color: Color = Swiss.Mute
 
 // ---------- page frame ----------
 
-/** Wallpaper (already darkened at decode) with an optional extra scrim for non-Home screens. */
+/**
+ * Wallpaper (already darkened at decode). Screens that want it darker pass [totalDim]: the extra
+ * dim is a colour filter on the wallpaper's own draw (multiply), not a full-screen scrim layer,
+ * so the GPU fills the screen once instead of twice.
+ */
 @Composable
 fun Backdrop(wallpaper: PreparedWallpaper?, totalDim: Float? = null, modifier: Modifier = Modifier) {
+    val extra = if (totalDim != null && wallpaper != null) {
+        // Wallpaper is pre-darkened by d; multiply the rest so the total matches the design.
+        val d = wallpaper.dim
+        if (d >= 1f) 0f else (1f - (1f - totalDim) / (1f - d)).coerceIn(0f, 1f)
+    } else 0f
+    val filter = remember(extra) {
+        if (extra <= 0f) null else {
+            val k = 1f - extra
+            ColorFilter.lighting(multiply = Color(k, k, k), add = Color.Black)
+        }
+    }
     Box(modifier.fillMaxSize().background(Swiss.Ground)) {
         Crossfade(wallpaper, animationSpec = tween(600), label = "wallpaper") { wp ->
             val bmp = wp?.bitmap
             if (bmp != null) {
                 val img = remember(bmp) { bmp.asImageBitmap() }
-                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, colorFilter = filter)
             }
-        }
-        if (totalDim != null && wallpaper != null) {
-            // Wallpaper is pre-darkened by d; add a scrim so the total matches the design.
-            val d = wallpaper.dim
-            val extra = if (d >= 1f) 0f else (1f - (1f - totalDim) / (1f - d)).coerceIn(0f, 1f)
-            if (extra > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = extra)))
         }
     }
 }
@@ -370,6 +380,53 @@ fun RuleRow(
     m = if (amber) m.topRule(4.dp, Swiss.Focus) else m.topRule()
     if (bottomRule) m = m.bottomRule()
     Row(m.padding(vertical = vertical), verticalAlignment = Alignment.CenterVertically) { content(focused) }
+}
+
+/**
+ * An item's focus as draw-phase colours. Rows built on it read focus only while drawing, so a
+ * D-pad press re-draws the two rows involved and recomposes nothing.
+ */
+@Stable
+class RowFocus(val focused: State<Boolean>) {
+    /** Amber when focused, else ink. */
+    val ink = ColorProducer { if (focused.value) Swiss.Focus else Swiss.Ink }
+    /** Amber when focused, else muted. */
+    val muted = ColorProducer { if (focused.value) Swiss.Focus else Swiss.Muted }
+}
+
+@Composable
+fun rememberRowFocus(state: FocusScreenState, index: Int): RowFocus = remember(state, index) { RowFocus(state.isFocused(index)) }
+
+/**
+ * [RuleRow] with draw-phase focus: the top rule (4 px amber when focused or [selected], else the
+ * 2 px rule) is drawn from the focus state, and [content] gets a [RowFocus] for its colours.
+ */
+@Composable
+fun FocusRuleRow(
+    state: FocusScreenState,
+    index: Int,
+    modifier: Modifier = Modifier,
+    bottomRule: Boolean = false,
+    selected: Boolean = false,
+    scrolling: Boolean = false,
+    vertical: Dp = 22.dp,
+    content: @Composable RowScope.(RowFocus) -> Unit,
+) {
+    val rf = rememberRowFocus(state, index)
+    Row(
+        modifier.fillMaxWidth().focusItem(state, index, FocusStyle.SELF, scrolling).drawRules(rf.focused, selected, bottomRule).padding(vertical = vertical),
+        verticalAlignment = Alignment.CenterVertically,
+    ) { content(rf) }
+}
+
+/** Top rule from focus at draw time (amber 4 px when focused or selected, else the 2 px rule) and an optional bottom rule. */
+fun Modifier.drawRules(focused: State<Boolean>, selected: Boolean = false, bottomRule: Boolean = false): Modifier = drawBehind {
+    if (focused.value || selected) drawRect(Swiss.Focus, Offset.Zero, Size(size.width, 4.dp.toPx()))
+    else drawRect(Swiss.Rule, Offset.Zero, Size(size.width, 2.dp.toPx()))
+    if (bottomRule) {
+        val w = 2.dp.toPx()
+        drawRect(Swiss.Rule, Offset(0f, size.height - w), Size(size.width, w))
+    }
 }
 
 /** Text tab with an underline: selected = underline, focused = amber. */

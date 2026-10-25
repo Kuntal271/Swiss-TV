@@ -87,7 +87,7 @@ fun UpNextTitleScreen(
     Box(Modifier.fillMaxSize().background(Swiss.Ground)) {
         FocusRoot(focus, Swiss.Focus) {
             Frame {
-                Header(deviceName.uppercase(), now.format(Fmt.clock), "Up next · %02d of %02d".format(position + 1, total), item.serviceName)
+                Header(deviceName.uppercase(), now.format(Fmt.clock), "Continue watching · %02d of %02d".format(position + 1, total), item.serviceName)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(5)).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
                         Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -211,19 +211,27 @@ fun TitleDetailsScreen(
                                 details?.runtimeMin?.takeIf { ref.type == MediaType.MOVIE }?.let { durationText(it) },
                                 details?.seasons?.takeIf { ref.type == MediaType.TV }?.let { if (it == 1) "1 season" else "$it seasons" },
                                 details?.ageRating?.takeIf { it.isNotBlank() },
+                                details?.score,
                             )
-                            Label(bits.joinToString(" · "), color = Swiss.Focus)
-                            T(details?.ref?.name ?: ref.name, SwissType.Title92, maxLines = 3)
+                            // No backdrop (OMDb/TVmaze titles often have none): show the poster beside the name.
+                            val poster = details?.posterUrl?.takeIf { details.backdropUrl == null }
+                            Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.Top) {
+                                if (poster != null) Art(poster, 180, 270, Modifier.size(180.dp, 270.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
+                                    Label(bits.joinToString(" · "), color = Swiss.Focus)
+                                    T(details?.ref?.name ?: ref.name, if (poster != null) SwissType.Title84 else SwissType.Title92, maxLines = 3)
+                                }
+                            }
                             val syn = when {
                                 details != null -> buildString {
-                                    append(details.synopsis.ifBlank { "No synopsis on TMDB yet." })
+                                    append(details.synopsis.ifBlank { "No synopsis yet." })
                                     if (details.genres.isNotEmpty()) append(" Genres: ").append(details.genres.joinToString(", ")).append('.')
                                     if (details.language != null) append(" Original language: ").append(details.language).append('.')
                                 }
-                                failed -> "Couldn’t load this title. Check the network, or add a TMDB key with setup.sh."
+                                failed -> "Couldn’t load this title. Check the network and try again."
                                 else -> "Loading…"
                             }
-                            T(syn, SwissType.Body26, Modifier.widthIn(max = 820.dp), maxLines = 5)
+                            T(syn, SwissType.Body26, Modifier.widthIn(max = 820.dp), maxLines = if (details?.backdropUrl == null && details?.posterUrl != null) 4 else 5)
                             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                                 for ((k, b) in buttons.withIndex()) when (b) {
                                     "watch" -> PrimaryButton(focus, k, (if (best?.kind == Kind.RENT || best?.kind == Kind.BUY) "Open " else "Watch on ") + (best?.providerName ?: ""))
@@ -252,17 +260,41 @@ fun TitleDetailsScreen(
                     ) {
                         Label("Where to watch in India", color = Swiss.Focus)
                         if (rows.isEmpty()) {
-                            T(if (details == null) "…" else "Not streaming, renting or selling in India right now.", SwissType.Body22, Modifier.padding(top = 14.dp))
+                            T(
+                                when {
+                                    details == null -> "…"
+                                    details.source == "TMDB" -> "Not streaming, renting or selling in India right now."
+                                    ref.type == MediaType.MOVIE -> "Where to watch isn’t known for films without a TMDB key."
+                                    else -> "No Indian service listed for this series on TVmaze."
+                                },
+                                SwissType.Body22, Modifier.padding(top = 14.dp),
+                            )
                         }
                         if (stream.isNotEmpty()) Label("Stream", Modifier.padding(top = 14.dp), style = SwissType.Label18)
                         for ((k, a) in stream.withIndex()) WatchRow(focus, buttons.size + k, a, last = k == stream.lastIndex && rentBuy.isEmpty())
                         if (rentBuy.isNotEmpty()) Label("Rent or buy", Modifier.padding(top = 18.dp), style = SwissType.Label18)
                         for ((k, a) in rentBuy.withIndex()) WatchRow(focus, buttons.size + stream.size + k, a, last = k == rentBuy.lastIndex)
+                        val eps = details?.nextEpisodes.orEmpty()
+                        if (eps.isNotEmpty() && rows.size <= 3) {
+                            Label("Season ${eps.first().season} · ${eps.size} episodes", Modifier.padding(top = 28.dp), style = SwissType.Label18)
+                            for (e in eps.takeLast(4).asReversed()) {
+                                T("E${e.number} · ${e.name}" + (e.runtimeMin?.let { " · ${durationText(it)}" } ?: ""), SwissType.Meta, maxLines = 1)
+                            }
+                        }
                         Box(Modifier.weight(1f))
-                        T("Updated daily. Prices are set by each service and may differ in the app.", SwissType.Meta18)
+                        T(
+                            if (details == null || details.source == "TMDB") "Updated daily. Prices are set by each service and may differ in the app."
+                            else if (ref.type == MediaType.MOVIE) "Add a working TMDB key for where-to-watch on films."
+                            else "From the series’ channel on TVmaze, so a rough guide. Add a TMDB key for full where-to-watch.",
+                            SwissType.Meta18,
+                        )
                     }
                 }
-                Footer("Titles and artwork: TMDB · Where to watch: JustWatch", listOf(KeyHint("OK", "Open"), KeyHint("Back", "Results")))
+                Footer(
+                    if (details == null || details.source == "TMDB") "Titles and artwork: TMDB · Where to watch: JustWatch"
+                    else "Titles: ${details.source} · Where to watch: TVmaze channel (series only)",
+                    listOf(KeyHint("OK", "Open"), KeyHint("Back", "Results")),
+                )
             }
         }
     }

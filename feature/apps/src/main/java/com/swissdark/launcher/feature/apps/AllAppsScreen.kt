@@ -207,10 +207,13 @@ private fun AppsFooter(grid: com.swissdark.launcher.core.focus.FocusScreenState,
             focusedApp != null -> focusedApp.label
             else -> "No apps"
         },
-        listOf(
-            com.swissdark.launcher.core.design.KeyHint("OK", "Open"),
-            com.swissdark.launcher.core.design.KeyHint("Hold OK", "Pin · Hide · Move"),
-            com.swissdark.launcher.core.design.KeyHint("Back", "Home"),
-        ),
+        footerKeys,
     )
 }
+
+// Built once: a press recomposes the footer line, and must not allocate the key hints again.
+private val footerKeys = listOf(
+    com.swissdark.launcher.core.design.KeyHint("OK", "Open"),
+    com.swissdark.launcher.core.design.KeyHint("Hold OK", "Pin · Hide · Move"),
+    com.swissdark.launcher.core.design.KeyHint("Back", "Home"),
+)

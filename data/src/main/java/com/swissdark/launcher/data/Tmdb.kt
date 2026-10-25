@@ -10,7 +10,6 @@ import com.swissdark.launcher.domain.SearchHit
 import com.swissdark.launcher.domain.TitleDetails
 import com.swissdark.launcher.domain.TitleRef
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -22,26 +21,23 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import java.io.IOException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class TmdbException(msg: String) : IOException(msg)
 
 /**
  * TMDB REST client, region IN. Titles and artwork: TMDB. Where to watch: JustWatch (via TMDB).
  * One shared OkHttp client, HTTP/2; the connection stays warm while search is open.
+ * Host api.tmdb.org: same API as api.themoviedb.org, which some Indian ISPs (Jio) block by DNS.
+ * Used through [TitleSources], which falls back to OMDb + TVmaze when the key is missing or refused.
  */
-class TmdbClient(private val http: OkHttpClient, private val key: () -> String) {
+class TmdbApi(private val http: OkHttpClient, private val key: () -> String) {
     private val json = Json { ignoreUnknownKeys = true }
-    private val base = "https://api.themoviedb.org/3".toHttpUrl()
+    private val base = "https://api.tmdb.org/3".toHttpUrl()
 
     val hasKey: Boolean get() = key().isNotBlank()
 
@@ -53,27 +49,31 @@ class TmdbClient(private val http: OkHttpClient, private val key: () -> String) 
         return b.build()
     }
 
-    private suspend fun get(url: HttpUrl): JsonObject = withContext(Dispatchers.IO) {
+    private suspend fun get(url: HttpUrl): JsonObject {
         if (!hasKey) throw TmdbException("No TMDB key")
-        val req = Request.Builder().url(url).apply {
-            val k = key()
-            if (k.length > 40) header("Authorization", "Bearer $k")
-            header("Accept", "application/json")
-        }.build()
-        val call = http.newCall(req)
-        val body = suspendCancellableCoroutine { cont ->
-            cont.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) = cont.resumeWithException(e)
-                override fun onResponse(call: Call, response: Response) {
-                    response.use {
-                        if (!it.isSuccessful) cont.resumeWithException(TmdbException("HTTP ${it.code}"))
-                        else cont.resume(it.body?.string().orEmpty())
-                    }
-                }
-            })
+        val (code, body) = http.fetch(request(url))
+        if (code !in 200..299) throw TmdbException("HTTP $code")
+        return withContext(Dispatchers.Default) { json.parseToJsonElement(body).jsonObject }
+    }
+
+    private fun request(url: HttpUrl): Request = Request.Builder().url(url).apply {
+        val k = key()
+        if (k.length > 40) header("Authorization", "Bearer $k")
+        header("Accept", "application/json")
+    }.build()
+
+    /**
+     * One call to /configuration: true = the key works, false = TMDB refused it (401/403).
+     * Throws IOException when TMDB could not be reached at all (unknown, ask again later).
+     */
+    suspend fun validate(): Boolean {
+        if (!hasKey) return false
+        val (code, _) = http.fetch(request(url("configuration")))
+        return when (code) {
+            in 200..299 -> true
+            401, 403 -> false
+            else -> throw TmdbException("HTTP $code")
         }
-        json.parseToJsonElement(body).jsonObject
     }
 
     suspend fun searchMulti(q: String): List<SearchHit> {

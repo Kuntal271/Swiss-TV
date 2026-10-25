@@ -131,6 +131,8 @@ data class TitleDetails(
     val availability: List<Availability>,
     val nextEpisodes: List<Episode> = emptyList(),
     val kidsSafe: Boolean = false,
+    val score: String? = null,                         // e.g. "IMDb 9.0"
+    val source: String = "TMDB",                       // credit line: where titles and availability came from
 )
 
 @Immutable
@@ -190,6 +192,8 @@ data class LauncherSettings(
     val sleepMinutes: Int = 0,
     val searchIntentApps: Map<String, Boolean> = emptyMap(),
     val showLatencyOverlay: Boolean = false,
+    // Appended last: protobuf field numbers follow declaration order, so old settings.pb still decodes.
+    val omdbKey: String = "",                          // OMDb key: titles without a working TMDB key
 )
 
 /** TCL utilities that clutter the app list. Hidden, not disabled; unhide in Launcher settings › Apps. */

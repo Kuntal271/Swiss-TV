@@ -48,10 +48,21 @@ import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.RuleRow
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
+import com.swissdark.launcher.core.design.FocusRuleRow
 import com.swissdark.launcher.core.design.T
+import com.swissdark.launcher.core.design.TDraw
+import com.swissdark.launcher.core.design.rememberRowFocus
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.ColorProducer
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.swissdark.launcher.core.design.bottomRule
 import com.swissdark.launcher.core.design.rememberMinute
 import com.swissdark.launcher.core.design.topRule
+import com.swissdark.launcher.core.focus.DpadKey
 import com.swissdark.launcher.core.focus.FocusRoot
 import com.swissdark.launcher.core.focus.FocusScreenState
 import com.swissdark.launcher.core.focus.FocusStyle
@@ -78,6 +89,7 @@ class SettingsInfo(
     val watchNext: String,
     val tmdb: Boolean,
     val photosPath: String,
+    val titleSource: String = "TMDB",                 // "TMDB", "OMDb + TVmaze" or "TVmaze"
 )
 
 @Immutable
@@ -105,6 +117,7 @@ fun LauncherSettingsScreen(
     var section by remember { mutableIntStateOf(initialSection) }
     var slot by remember { mutableStateOf(TimeSlot.at(LocalTime.now())) }
     val now by rememberMinute()
+    val scope = rememberCoroutineScope()
 
     val content: SectionContent = when (section) {
         0 -> homeSection(settings, actions)
@@ -115,8 +128,39 @@ fun LauncherSettingsScreen(
         else -> aboutSection(info)
     }
     val focus = rememberFocusScreen(sections.size + content.count, initial = initialSection, active = active)
-    focus.onFocusChanged = { i -> if (i < sections.size && i != section) section = i }
-    focus.onClick = { i -> if (i >= sections.size) content.click(i - sections.size) }
+    // Moving through the section list does not rebuild the right side on every press: the
+    // section under focus is shown once focus rests on it (SECTION_DWELL_MS), on OK, or as soon
+    // as focus moves right into the content.
+    val nav = remember { SectionNav() }
+    fun show(s: Int) {
+        nav.cancel()
+        if (s != section) {
+            section = s
+            focus.scrollY.floatValue = 0f
+        }
+    }
+    focus.onFocusChanged = { i ->
+        val wasPending = nav.pending != null
+        nav.cancel()
+        if (i < sections.size) {
+            nav.row = i
+            if (i != section) nav.pending = scope.launch { delay(SECTION_DWELL_MS); nav.pending = null; show(i) }
+        } else if (wasPending && nav.row != section) {
+            // RIGHT before the dwell ran out: open that row's section and enter it at the top.
+            val target = nav.row
+            show(target)
+            focus.focus(if (contentCount(target, catalog, allApps) > 0) sections.size else target)
+        }
+    }
+    focus.onEdge = { i, dir ->
+        // RIGHT from a row whose section is not shown yet and whose shown section has nothing to enter.
+        if (dir == DpadKey.RIGHT && i < sections.size && i != section && contentCount(i, catalog, allApps) > 0) {
+            show(i)
+            focus.focus(sections.size)
+            true
+        } else false
+    }
+    focus.onClick = { i -> if (i >= sections.size) content.click(i - sections.size) else show(i) }
     focus.onOtherKey = { e ->
         if (e.keyCode == KeyEvent.KEYCODE_BACK) {
             if (e.action == KeyEvent.ACTION_UP) actions.back()
@@ -132,8 +176,9 @@ fun LauncherSettingsScreen(
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(3))) {
                         for ((i, s) in sections.withIndex()) {
-                            RuleRow(focus, i, bottomRule = i == sections.lastIndex, selected = i == section, vertical = 18.dp) { f ->
-                                T(s, SwissType.Row34, color = if (f || i == section) Swiss.Focus else Swiss.Ink)
+                            val sel = i == section
+                            FocusRuleRow(focus, i, bottomRule = i == sections.lastIndex, selected = sel, vertical = 18.dp) { f ->
+                                TDraw(s, SwissType.Row34, if (sel) AmberColor else f.ink)
                             }
                         }
                     }
@@ -147,10 +192,35 @@ fun LauncherSettingsScreen(
                         }
                     }
                 }
-                Footer("Settings and viewing habits stay on the TV", listOf(KeyHint("Back", "Home")))
+                Footer("Settings and viewing habits stay on the TV", footerKeys)
             }
         }
     }
+}
+
+private const val SECTION_DWELL_MS = 350L
+
+private val footerKeys = listOf(KeyHint("Back", "Home"))
+
+private val AmberColor = ColorProducer { Swiss.Focus }
+
+/** The section row under focus and its pending switch (plain fields: touched from key handling only). */
+private class SectionNav {
+    var row = -1
+    var pending: Job? = null
+    fun cancel() {
+        pending?.cancel()
+        pending = null
+    }
+}
+
+/** Focus items in section [s] (must match the counts the section builders below report). */
+private fun contentCount(s: Int, catalog: List<Wallpaper>, apps: List<AppEntry>): Int = when (s) {
+    0 -> 2
+    1 -> 4 + minOf(catalog.size, 11) + 1 + 2
+    2 -> serviceKeys.size + 1
+    3 -> apps.size + 1
+    else -> 0
 }
 
 private class SectionContent(
@@ -163,8 +233,8 @@ private class SectionContent(
 
 @Composable
 private fun ValueRow(focus: FocusScreenState, index: Int, label: String, value: String, last: Boolean = false) {
-    RuleRow(focus, index, bottomRule = last, vertical = 18.dp, scrolling = true) { f ->
-        T(label, SwissType.Row30, Modifier.weight(1f), if (f) Swiss.Focus else Swiss.Ink, maxLines = 1)
+    FocusRuleRow(focus, index, bottomRule = last, vertical = 18.dp, scrolling = true) { f ->
+        TDraw(label, SwissType.Row30, f.ink, Modifier.weight(1f), maxLines = 1)
         T(value, SwissType.Value26, color = Swiss.Focus, maxLines = 1)
     }
 }
@@ -283,12 +353,15 @@ private fun wallpaperSection(
 
 @Composable
 private fun StepButton(f: FocusScreenState, index: Int, text: String) {
-    val focused by remember(f, index) { f.isFocused(index) }
-    T(
-        text, SwissType.Row30,
+    val rf = rememberRowFocus(f, index)
+    TDraw(
+        text, SwissType.Row30, rf.ink,
         Modifier.focusItem(f, index, FocusStyle.SELF, scrolling = true)
-            .border(2.dp, if (focused) Swiss.Focus else Swiss.Rule).padding(horizontal = 20.dp, vertical = 4.dp),
-        if (focused) Swiss.Focus else Swiss.Ink,
+            .drawBehind {
+                val w = 2.dp.toPx()
+                drawRect(if (rf.focused.value) Swiss.Focus else Swiss.Rule, Offset(w / 2f, w / 2f), Size(size.width - w, size.height - w), style = Stroke(w))
+            }
+            .padding(horizontal = 20.dp, vertical = 4.dp),
     )
 }
 
@@ -305,7 +378,7 @@ private fun Thumb(
 ) {
     var bmp by remember(wp?.id, h) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(wp?.id, h) {
-        if (wp != null) bmp = withContext(Dispatchers.IO) { a.thumbnail(wp, h * 16 / 9 * 2, h * 2) }
+        if (wp != null) bmp = withContext(Dispatchers.IO) { a.thumbnail(wp, h * 16 / 9, h) }
     }
     // Selection: the amber rule under the picked thumbnail draws out from the centre.
     val reduce = LocalReduceMotion.current
@@ -392,9 +465,15 @@ private fun aboutSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
         InfoRow("Home app", if (info.isHome) "This launcher" else "Not set — run setup.sh")
         InfoRow("Usage access (habits)", if (info.usageAccess) "Granted" else "Missing — run setup.sh")
         InfoRow("Watch Next", info.watchNext)
-        InfoRow("TMDB key", if (info.tmdb) "Set" else "Missing — setup.sh TMDB_KEY=…", last = true)
+        InfoRow(
+            "Titles",
+            if (info.titleSource == "TMDB") "TMDB" else info.titleSource + " · TMDB key " + if (info.tmdb) "refused or unreachable" else "missing",
+            last = true,
+        )
         T(
-            "Titles and artwork: TMDB. Where to watch: JustWatch. Icons: Tabler Icons (MIT). Type: Archivo (OFL). " +
+            (if (info.titleSource == "TMDB") "Titles and artwork: TMDB. Where to watch: JustWatch. "
+            else "Titles: ${info.titleSource} (TMDB is used when its key works). Where to watch: TVmaze channels, approximate. ") +
+                "Icons: Tabler Icons (MIT). Type: Archivo (OFL). " +
                 "This product uses the TMDB API but is not endorsed or certified by TMDB.",
             SwissType.Body22, Modifier.padding(top = 24.dp),
         )

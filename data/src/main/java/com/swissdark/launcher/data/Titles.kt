@@ -66,7 +66,7 @@ private fun SearchHit.toDto(): HitDto? = when (this) {
 }
 
 private fun HitDto.toHit(): SearchHit = if (person) SearchHit.PersonHit(com.swissdark.launcher.domain.Person(id, name, role, dept, known))
-else SearchHit.Title(TitleRef(id, MediaType.valueOf(t), name), poster, backdrop, meta, null, kids, pop)
+else SearchHit.Title(TitleRef(id, MediaType.valueOf(t), name), poster?.replace("@", "%40"), backdrop, meta, null, kids, pop) // rows cached before OmdbParse.poster encoded '@' 
 
 class SearchEngineImpl(
     private val scope: CoroutineScope,
@@ -123,22 +123,26 @@ class SearchEngineImpl(
 
     override fun local(query: String): List<SearchHit> = index.lookup(query)
 
+    override val titleSource: String get() = tmdb.label
+
     /**
-     * Wave 2: 150 ms after the last keystroke, Room's copy from the last 24 h, else TMDB.
+     * Wave 2: 150 ms after the last keystroke, Room's copy from the last 24 h, else the title
+     * sources (TMDB, or OMDb + TVmaze). Cached per source, so a working TMDB key replaces fallback lists.
      * JSON work runs on Default (flowOn), not in the collector's main-thread context.
      */
     override fun remote(query: String): Flow<List<SearchHit>> = flow {
         val q = LocalIndex.normalize(query)
         if (q.length < 2 || !tmdb.hasKey) return@flow
         delay(150)
-        val cached = dao.query(q, System.currentTimeMillis() - DAY)
+        val ck = q + tmdb.cacheTag()
+        val cached = dao.query(ck, System.currentTimeMillis() - DAY)
         if (cached != null) {
             emit(json.decodeFromString(listSer, cached.json).map { it.toHit() })
             return@flow
         }
         val hits = tmdb.searchMulti(query)
         emit(hits)
-        dao.putQuery(QueryRow(q, json.encodeToString(listSer, hits.mapNotNull { it.toDto() }), System.currentTimeMillis()))
+        dao.putQuery(QueryRow(ck, json.encodeToString(listSer, hits.mapNotNull { it.toDto() }), System.currentTimeMillis()))
         remember(hits.filterIsInstance<SearchHit.Title>())
     }.flowOn(Dispatchers.Default)
 
@@ -181,7 +185,7 @@ class SearchEngineImpl(
     }
 
     override suspend fun trending(daily: Boolean): List<SearchHit.Title> = withContext(Dispatchers.Default) {
-        val key = if (daily) "~trending/day" else "~trending/week"
+        val key = (if (daily) "~trending/day" else "~trending/week") + tmdb.cacheTag()
         val cached = dao.query(key, System.currentTimeMillis() - DAY)
         if (cached != null) return@withContext json.decodeFromString(listSer, cached.json).mapNotNull { it.toHit() as? SearchHit.Title }
         if (!tmdb.hasKey) return@withContext emptyList()
@@ -193,11 +197,11 @@ class SearchEngineImpl(
 
     /** Opens from cache when the network is slow: any copy, however old. */
     suspend fun trendingCachedAnyAge(daily: Boolean): List<SearchHit.Title> = withContext(Dispatchers.Default) {
-        val key = if (daily) "~trending/day" else "~trending/week"
+        val key = (if (daily) "~trending/day" else "~trending/week") + tmdb.cacheTag()
         dao.query(key, 0)?.let { json.decodeFromString(listSer, it.json).mapNotNull { h -> h.toHit() as? SearchHit.Title } }.orEmpty()
     }
 
-    override suspend fun byGenre(genre: String): List<SearchHit> = cachedList("~genre/$genre") { tmdb.discover(genre) }
+    override suspend fun byGenre(genre: String): List<SearchHit> = cachedList("~genre/$genre" + tmdb.cacheTag()) { tmdb.discover(genre) }
 
     override suspend fun byPerson(personId: Int): List<SearchHit> = cachedList("~person/$personId") { tmdb.personCredits(personId) }
 

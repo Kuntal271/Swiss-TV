@@ -56,6 +56,79 @@ data class WatchedRow(
     val tmdbTried: Boolean = false,
 ) {
     val finished: Boolean get() = durationMs > 0 && positionMs >= durationMs * 0.95
+
+    /** An app that plays without saying what (Netflix, Prime Video…): one row per app, no title. */
+    val appOnly: Boolean get() = key.endsWith(WatchedStore.APP_GROUP)
+}
+
+/**
+ * Decides whether an app that publishes no title (Netflix, Prime Video, JioHotstar…) is really
+ * being watched, rather than autoplaying a trailer on its home screen. Pure, so it is unit-tested.
+ *
+ * Observed on the TV: Netflix's home autoplays previews as PLAYING with no metadata at all (no
+ * duration, position from 0) and goes STOPPED when you move on; Prime reports the placeholder
+ * title "PrimeVideo" with its position stuck at 0. So:
+ *  - a known duration under 5 min is a trailer/preview: never;
+ *  - PLAYING time counts up across pauses but starts again after STOPPED or a new item (duration
+ *    change), so a string of previews never adds up;
+ *  - 60 s of play is enough when the item is a real length (≥ 5 min) or was resumed mid-way;
+ *    with nothing to go on (no duration, from 0) it takes 2 min, longer than most previews.
+ * Once accepted, every later sample of that item updates the row (pause, stop: recency).
+ */
+class PlaybackGate {
+    /** [positionMs]/[durationMs] are 0 when the app's numbers are not worth a progress bar. */
+    data class Verdict(val positionMs: Long, val durationMs: Long)
+
+    private class S {
+        var played = 0L
+        var lastAt = -1L
+        var playing = false
+        var startPos = -1L
+        var dur = 0L
+        var accepted = false
+        var lastReported = -1L
+        var moved = false
+    }
+
+    private val byPkg = HashMap<String, S>()
+
+    /**
+     * One media-session sample. [ended]: STOPPED or the session went away. [reportedPosMs] is the
+     * app's own position; [positionMs] the same extrapolated to [atMs]. Null: not (yet) a watch.
+     */
+    fun feed(pkg: String, playing: Boolean, ended: Boolean, reportedPosMs: Long, positionMs: Long, durationMs: Long, atMs: Long): Verdict? {
+        var s = byPkg.getOrPut(pkg) { S() }
+        if (s.playing && s.lastAt >= 0) s.played += (atMs - s.lastAt).coerceIn(0L, MAX_GAP_MS)
+        // Another item (episode, film, trailer) in the same session: start over.
+        if (s.dur > 0 && durationMs > 0 && kotlin.math.abs(durationMs - s.dur) > 2_000) {
+            s = S(); byPkg[pkg] = s
+        }
+        if (durationMs > 0) s.dur = durationMs
+        if (s.startPos < 0 && playing) s.startPos = reportedPosMs
+        if (s.lastReported >= 0 && reportedPosMs > 0 && reportedPosMs != s.lastReported) s.moved = true
+        s.lastReported = reportedPosMs
+        s.playing = playing && !ended
+        s.lastAt = atMs
+        if (!s.accepted && !(s.dur in 1 until REAL_MIN_MS)) {
+            val need = if (s.dur >= REAL_MIN_MS || s.startPos >= RESUMED_MS) PLAY_MS else PLAY_UNKNOWN_MS
+            if (s.played >= need) s.accepted = true
+        }
+        val v = if (!s.accepted) null else {
+            val sane = s.dur >= REAL_MIN_MS && s.moved && positionMs in 1..s.dur
+            if (sane) Verdict(positionMs, s.dur) else Verdict(0, 0)
+        }
+        if (ended) byPkg.remove(pkg)
+        return v
+    }
+
+    companion object {
+        const val REAL_MIN_MS = 5 * 60_000L
+        const val PLAY_MS = 60_000L
+        const val PLAY_UNKNOWN_MS = 120_000L
+        const val RESUMED_MS = 60_000L
+        /** Samples come every 30 s while playing; a longer gap (TV asleep) counts as no more than this. */
+        const val MAX_GAP_MS = 45_000L
+    }
 }
 
 @Dao
@@ -94,7 +167,7 @@ class WatchedStore(
     private val thumbs by lazy { File(context.filesDir, "watched").apply { mkdirs() } }
     /** Which row each app's live session is playing right now (main thread writes, any thread reads). */
     private val liveKeyByPkg = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val labels = HashMap<String, String>()
+    private val labels = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     val listener = ComponentName(context.packageName, LISTENER_CLASS)
     private val watcher by lazy { MediaSessionWatcher(context, listener) { onSample(it) } }
@@ -132,7 +205,10 @@ class WatchedStore(
 
     // ---- recording ----
 
+    private val gate = PlaybackGate()
+
     private fun onSample(s: MediaSample) {
+        if (untitled(s)) return onUntitled(s)
         val parsed = parse(s) ?: return
         val key = s.packageName + "|" + parsed.group
         if (!s.ended) liveKeyByPkg[s.packageName] = key
@@ -145,6 +221,56 @@ class WatchedStore(
             }
         }
     }
+
+    /** No usable title: Netflix (no metadata), Prime ("PrimeVideo"), most Indian apps, VLC… */
+    private fun untitled(s: MediaSample): Boolean {
+        if (s.packageName == YOUTUBE || s.packageName == CRUNCHYROLL) return false
+        val t = s.title ?: return true
+        return isPlaceholder(t, s.packageName)
+    }
+
+    private fun onUntitled(s: MediaSample) {
+        val v = gate.feed(s.packageName, s.playing, s.ended, s.reportedPositionMs, s.positionMs, s.durationMs, s.atMillis) ?: return
+        val key = s.packageName + "|" + APP_GROUP
+        if (s.ended) liveKeyByPkg.remove(s.packageName, key) else liveKeyByPkg[s.packageName] = key
+        scope.launch(writer) {
+            try {
+                recordApp(s, key, v)
+            } catch (e: Exception) {
+                Log.w(MediaSessionWatcher.TAG, "record failed", e)
+            }
+        }
+    }
+
+    private suspend fun recordApp(s: MediaSample, key: String, v: PlaybackGate.Verdict) {
+        if (!launchable(s.packageName)) return
+        val dao = db.dao()
+        val old = dao.get(key)
+        // Netflix reports position 0 as it stops: keep the last real numbers.
+        val keep = old != null && v.durationMs == 0L && old.durationMs > 0 && s.ended
+        val row = WatchedRow(
+            key = key, pkg = s.packageName, show = appLabel(s.packageName), episodeTitle = null,
+            season = null, episode = null, series = false,
+            positionMs = if (keep) old!!.positionMs else v.positionMs,
+            durationMs = if (keep) old!!.durationMs else v.durationMs,
+            art = null, mediaId = null, updatedAt = s.atMillis, tmdbTried = true,
+        )
+        if (row == old) return
+        dao.put(row)
+        known[key] = row
+        if (old == null) dao.trim(KEEP)
+        if (old == null || !s.playing) onChanged()
+    }
+
+    private fun launchable(pkg: String): Boolean = launchables.getOrPut(pkg) {
+        val pm = context.packageManager
+        try { pm.getLeanbackLaunchIntentForPackage(pkg) != null || pm.getLaunchIntentForPackage(pkg) != null } catch (_: Exception) { false }
+    }
+    private val launchables = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    private fun appLabel(pkg: String): String = labels.getOrPut(pkg) {
+        try { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { "" }
+    }.ifEmpty { pkg }
 
     private class Parsed(val show: String, val episodeTitle: String?, val season: Int?, val episode: Int?, val series: Boolean) {
         /** One row per show; apps that only publish the episode name get one row (their latest). */
@@ -261,6 +387,7 @@ class WatchedStore(
     fun open(uri: String): Boolean {
         val key = uri.removePrefix(PREFIX)
         val row = known[key] ?: return false
+        if (row.appOnly) return openApp(row)
         if (liveKeyByPkg[row.pkg] == key) {
             val pi = if (started) watcher.sessionActivity(row.pkg) else null
             if (pi != null && send(pi)) return true
@@ -269,6 +396,19 @@ class WatchedStore(
         // Crunchyroll: no working deep link, and its search does not find episode names.
         // Its home opens on "Continue watching", which is the next best thing.
         return row.pkg == CRUNCHYROLL && launch.launchPackage(row.pkg)
+    }
+
+    /**
+     * Netflix, Prime…: the live session's own intent if it has one (Netflix and Prime publish
+     * none), else the app itself, which comes back where it was or on its own Continue watching
+     * row. A session left paused is unpaused once the app is in front.
+     */
+    private fun openApp(row: WatchedRow): Boolean {
+        val live = started && watcher.isLive(row.pkg)
+        val pi = if (live) watcher.sessionActivity(row.pkg) else null
+        if (!(pi != null && send(pi)) && !launch.launchPackage(row.pkg)) return false
+        if (live) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ watcher.play(row.pkg) }, 800)
+        return true
     }
 
     private fun send(pi: PendingIntent): Boolean = try {
@@ -294,6 +434,8 @@ class WatchedStore(
         const val LISTENER_CLASS = "com.swissdark.launcher.MediaListenerService"
         const val YOUTUBE = "com.google.android.youtube.tv"
         const val CRUNCHYROLL = "com.crunchyroll.crunchyroid"
+        /** Row key suffix ("<package>|@app") of an app that played without a title. */
+        const val APP_GROUP = "@app"
         private const val KEEP = 60
         private const val MIN_WATCHED_MS = 15_000L
         private const val MIN_DURATION_MS = 90_000L

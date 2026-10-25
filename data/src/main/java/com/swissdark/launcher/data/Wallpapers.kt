@@ -218,14 +218,46 @@ class WallpaperSchedulerImpl(
         }
     }
 
+    /**
+     * Settings picker thumbnail. The 4K original is decoded once into a small JPEG in cacheDir
+     * (THUMB_W x THUMB_H); every later load decodes that file, which is ~100x less work and
+     * never allocates a 4K-sized buffer. Requests are capped at the cached size.
+     */
     override fun loadThumbnail(wallpaper: Wallpaper, width: Int, height: Int): Bitmap? {
-        val key = "${wallpaper.id}@${width}x$height"
+        val w = width.coerceIn(1, THUMB_W); val h = height.coerceIn(1, THUMB_H)
+        val key = "${wallpaper.id}@${w}x$h"
         thumbs.get(key)?.let { return it }
-        val b = decode(File(wallpaper.file), width, height, 0f) ?: return null
+        val small = smallThumb(wallpaper) ?: return null
+        val b = decode(small, w, h, 0f) ?: return null
         val hw = b.copy(Bitmap.Config.HARDWARE, false) ?: b
         if (hw !== b) b.recycle()
         thumbs.put(key, hw)
         return hw
+    }
+
+    private val thumbDir = File(context.cacheDir, "thumbs")
+
+    /** The cached small JPEG for [wp], made on first use (one 4K decode at a time). */
+    private fun smallThumb(wp: Wallpaper): File? {
+        val src = File(wp.file)
+        val f = File(thumbDir, "${wp.id}_${src.length()}_${src.lastModified()}.jpg")
+        if (f.exists()) return f
+        synchronized(thumbDir) {
+            if (f.exists()) return f
+            val b = decode(src, THUMB_W, THUMB_H, 0f) ?: return null
+            return try {
+                thumbDir.mkdirs()
+                thumbDir.listFiles { x -> x.name.startsWith(wp.id + "_") }?.forEach { it.delete() }
+                val tmp = File(thumbDir, f.name + ".tmp")
+                tmp.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+                if (tmp.renameTo(f)) f else src
+            } catch (e: Exception) {
+                android.util.Log.w("Wallpapers", "thumb ${wp.id} failed", e)
+                src
+            } finally {
+                b.recycle()
+            }
+        }
     }
 
     override fun loadUndimmed(): Bitmap? {
@@ -256,6 +288,8 @@ class WallpaperSchedulerImpl(
 
     companion object {
         const val ACTION_PREPARE = "com.swissdark.launcher.PREPARE_WALLPAPER"
+        private const val THUMB_W = 384
+        private const val THUMB_H = 216
         private val boundaries = intArrayOf(6, 12, 18, 23)
 
         fun nextBoundary(now: LocalDateTime): LocalDateTime {

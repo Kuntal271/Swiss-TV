@@ -76,14 +76,16 @@ class BootReceiver : BroadcastReceiver() {
     }
 }
 
-/** `adb shell am broadcast -a com.swissdark.launcher.CONFIG --es tmdb_key … --es services netflix,prime` */
+/** `adb shell am broadcast -a com.swissdark.launcher.CONFIG --es tmdb_key … --es omdb_key … --es services netflix,prime` */
 class ConfigReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val key = intent.getStringExtra("tmdb_key")
+        val omdb = intent.getStringExtra("omdb_key")
         val services = intent.getStringExtra("services")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
         context.graph.settings.update { s ->
             var n = s
             if (key != null) n = n.copy(tmdbKey = key.trim())
+            if (omdb != null) n = n.copy(omdbKey = omdb.trim())
             if (services != null) n = n.copy(myServices = services)
             n
         }

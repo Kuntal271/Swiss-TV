@@ -12,6 +12,7 @@ import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,7 +23,8 @@ private const val PKG = "com.swissdark.launcher"
  * Release gates, run on the 55C61B over ADB:
  *   ./gradlew :benchmark:connectedBenchmarkAndroidTest
  * Pass if: cold start median < 700 ms, warm Home median < 120 ms, 0 frames over 16.7 ms while
- * holding Right for 10 s in All apps, nav.key p95 < 8 ms / p99 < 10 ms.
+ * holding Right for 10 s in All apps, per-press frame work p95 < 8 ms / p99 < 10 ms and
+ * nav.key (key dispatch to frame commit) p95 < 8 ms + one vsync.
  */
 @RunWith(AndroidJUnit4::class)
 @OptIn(ExperimentalMetricApi::class)
@@ -60,21 +62,32 @@ class LauncherBenchmarks {
     }
 
     @Test
-    fun navigationLatency() = rule.measureRepeated(
-        packageName = PKG,
-        metrics = listOf(TraceSectionMetric("nav.key", TraceSectionMetric.Mode.Sum), FrameTimingMetric()),
-        compilationMode = CompilationMode.Partial(),
-        startupMode = StartupMode.WARM,
-        iterations = 5,
-        setupBlock = { startActivityAndWait(homeIntent()) },
-    ) {
-        // 200 single presses across Home
-        repeat(50) {
-            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_RIGHT)
-            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_RIGHT)
-            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_LEFT)
-            device.pressKeyCode(KeyEvent.KEYCODE_DPAD_LEFT)
+    fun navigationLatency() {
+        KeyToFrameMetric.samples.clear()
+        rule.measureRepeated(
+            packageName = PKG,
+            metrics = listOf(KeyToFrameMetric(), TraceSectionMetric("nav.dispatch", TraceSectionMetric.Mode.Max), FrameTimingMetric()),
+            compilationMode = CompilationMode.Partial(),
+            startupMode = StartupMode.WARM,
+            iterations = 5,
+            setupBlock = { startActivityAndWait(homeIntent()) },
+        ) {
+            // 200 single presses across Home, at a human pace (one frame + margin apart).
+            repeat(50) {
+                for (k in intArrayOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_LEFT)) {
+                    device.pressKeyCode(k)
+                    Thread.sleep(60)
+                }
+            }
         }
+        // The release gate: the app's own work per press (handler + UI frame + RenderThread).
+        val p95 = KeyToFrameMetric.percentile("frameWorkMs", 0.95)
+        val p99 = KeyToFrameMetric.percentile("frameWorkMs", 0.99)
+        assertTrue("key frame work p95 $p95 ms (budget 8)", p95 < 8.0)
+        assertTrue("key frame work p99 $p99 ms (budget 10)", p99 < 10.0)
+        // And the end-to-end: key to frame committed, within one vsync of the work.
+        val k2f = KeyToFrameMetric.percentile("navKeyMs", 0.95)
+        assertTrue("key to frame commit p95 $k2f ms (budget 8 + one 16.7 ms vsync)", k2f < 8.0 + 16.7)
     }
 
     @Test

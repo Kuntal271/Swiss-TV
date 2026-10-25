@@ -4,6 +4,7 @@
 #
 #   TV=192.168.31.55 ./setup/setup.sh                 # install + configure
 #   TMDB_KEY=xxxx ./setup/setup.sh                    # also store a TMDB key (titles, trending, where to watch)
+#   OMDB_KEY=xxxx ./setup/setup.sh                    # OMDb key: titles via OMDb + TVmaze when TMDB is unusable
 #   SERVICES=netflix,prime,jiohotstar ./setup/setup.sh
 #   PHOTOS=~/Pictures/tv ./setup/setup.sh             # push your own wallpapers
 #   BLOAT="com.tcl.exhibit com.tcl.ocean.instructions" ./setup/setup.sh   # disable chosen bloat
@@ -80,10 +81,11 @@ if [[ -n "${PHOTOS:-}" && -d "$PHOTOS" ]]; then
   done
 fi
 
-if [[ -n "${TMDB_KEY:-}" || -n "${SERVICES:-}" ]]; then
+if [[ -n "${TMDB_KEY:-}" || -n "${OMDB_KEY:-}" || -n "${SERVICES:-}" ]]; then
   say "Launcher config"
   args=()
   [[ -n "${TMDB_KEY:-}" ]] && args+=(--es tmdb_key "$TMDB_KEY")
+  [[ -n "${OMDB_KEY:-}" ]] && args+=(--es omdb_key "$OMDB_KEY")
   [[ -n "${SERVICES:-}" ]] && args+=(--es services "$SERVICES")
   A am broadcast -a "$PKG.CONFIG" -n "$PKG/.ConfigReceiver" "${args[@]}" >/dev/null && ok "stored"
 fi

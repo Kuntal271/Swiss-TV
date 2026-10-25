@@ -52,6 +52,7 @@ import com.swissdark.launcher.feature.home.HomeActions
 import com.swissdark.launcher.feature.home.HomeScreen
 import com.swissdark.launcher.feature.home.HomeStatus
 import com.swissdark.launcher.feature.home.isAppOnly
+import com.swissdark.launcher.feature.home.isAppPlayback
 import com.swissdark.launcher.feature.panels.InputsActions
 import com.swissdark.launcher.feature.panels.InputsPanel
 import com.swissdark.launcher.feature.panels.QuickActions
@@ -165,7 +166,12 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                 remember {
                     HomeActions(
                         openItem = { item ->
-                            if (item.isAppOnly()) {
+                            if (item.isAppPlayback()) {
+                                // Netflix, Prime…: no title to show a page for. Straight back in:
+                                // the live session if there is one, else the app.
+                                val uri = item.intentUri
+                                if (uri == null || g.launcher.watchedOpener?.invoke(uri) != true) report(g.launcher.launch(item.service), item.serviceName)
+                            } else if (item.isAppOnly()) {
                                 // Nothing to show about a bare app: open it, like an app tile does.
                                 report(g.launcher.launch(item.service), item.serviceName)
                             } else {
@@ -316,7 +322,8 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                             isHome = isHome,
                             usageAccess = g.usage.hasAccess(),
                             watchNext = g.home.watchNextStatus,
-                            tmdb = g.tmdb.hasKey,
+                            tmdb = g.settings.settings.value.tmdbKey.isNotBlank() || BuildConfig.TMDB_KEY.isNotBlank(),
+                            titleSource = g.tmdb.label,
                             photosPath = "/sdcard/Android/data/${BuildConfig.APPLICATION_ID}/files/photos",
                         ),
                         device, wallpaper,

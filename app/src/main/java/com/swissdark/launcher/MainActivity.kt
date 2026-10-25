@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
             if (routes.size > 1) {
                 routes.clear(); routes.add(Route.Home)
             }
+            com.swissdark.launcher.core.focus.HomePress.press()
         }
     }
 

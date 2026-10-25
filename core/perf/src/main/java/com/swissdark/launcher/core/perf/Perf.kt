@@ -3,6 +3,7 @@ package com.swissdark.launcher.core.perf
 import android.app.Activity
 import android.util.Log
 import android.view.Choreographer
+import android.view.View
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -23,7 +24,16 @@ import androidx.tracing.Trace
 
 /** Named trace sections; the Perfetto queries in the benchmark module look for these names. */
 object Sections {
+    /**
+     * Async section: from the moment a D-pad key is dispatched to the app until the frame that
+     * shows its result has been rendered and submitted (frame commit). This is the real budget:
+     * handler work + recomposition + layout + record + RenderThread draw (+ the wait for vsync).
+     */
     const val NAV_KEY = "nav.key"
+    /** The synchronous part of a D-pad press on the UI thread (lookup, scroll, ring, callbacks). */
+    const val NAV_DISPATCH = "nav.dispatch"
+    /** The neighbour lookup alone (one array read). */
+    const val NAV_LOOKUP = "nav.lookup"
     const val SNAPSHOT_BUILD = "snapshot.build"
     const val SNAPSHOT_READ = "snapshot.read"
     const val WALLPAPER_DECODE = "wallpaper.decode"
@@ -41,8 +51,10 @@ inline fun <T> traced(name: String, block: () -> T): T {
 }
 
 /**
- * Key-to-frame latency: the time from the key event's own timestamp to the start of the frame
- * that draws the result. Fixed-size ring buffer, no allocation per press.
+ * Key-to-frame latency: from the key event's own timestamp to the commit of the frame that draws
+ * the result (ViewTreeObserver frame-commit callback, i.e. rendered and handed to the display).
+ * Also emits the async trace section [Sections.NAV_KEY] over the same span (from dispatch).
+ * One key in flight at a time; fixed-size ring buffer, no allocation per press.
  */
 object KeyLatency {
     private const val N = 60
@@ -50,25 +62,47 @@ object KeyLatency {
     private var count = 0
     private var head = 0
     private var pendingEventNanos = 0L
+    private var inFlight = false
+    private var cookie = 0
+    private var view: View? = null
     val version = mutableIntStateOf(0)
 
-    private val callback = Choreographer.FrameCallback { frameNanos ->
-        val start = pendingEventNanos
-        if (start != 0L) {
-            pendingEventNanos = 0L
-            val us = ((frameNanos - start) / 1000L).toInt().coerceAtLeast(0)
-            samples[head] = us
-            head = (head + 1) % N
-            if (count < N) count++
-            version.intValue++
-        }
+    private val commit = Runnable { finish(System.nanoTime()) }
+
+    // Fallback before attach(): the start of the next frame.
+    private val frameStart = Choreographer.FrameCallback { frameNanos -> finish(frameNanos) }
+
+    /** The window's decor view; frame-commit callbacks are registered on it. */
+    fun attach(view: View) {
+        this.view = view
     }
 
     /** Call from the key handler with KeyEvent.eventTime (uptime millis). */
     fun onKey(eventUptimeMillis: Long) {
-        if (pendingEventNanos != 0L) return
+        if (inFlight) return
+        inFlight = true
         pendingEventNanos = eventUptimeMillis * 1_000_000L
-        Choreographer.getInstance().postFrameCallback(callback)
+        cookie++
+        Trace.beginAsyncSection(Sections.NAV_KEY, cookie)
+        val v = view
+        if (v != null && v.isAttachedToWindow) {
+            v.viewTreeObserver.registerFrameCommitCallback(commit)
+            // Make sure a frame follows even when the press changed nothing (an edge).
+            v.invalidate()
+        } else {
+            Choreographer.getInstance().postFrameCallback(frameStart)
+        }
+    }
+
+    private fun finish(nowNanos: Long) {
+        if (!inFlight) return
+        inFlight = false
+        Trace.endAsyncSection(Sections.NAV_KEY, cookie)
+        val us = ((nowNanos - pendingEventNanos) / 1000L).toInt().coerceAtLeast(0)
+        samples[head] = us
+        head = (head + 1) % N
+        if (count < N) count++
+        version.intValue++
     }
 
     fun last(): Int = if (count == 0) 0 else samples[(head - 1 + N) % N]
@@ -91,6 +125,7 @@ object Jank {
         private set
 
     fun install(activity: Activity) {
+        KeyLatency.attach(activity.window.decorView)
         stats = JankStats.createAndTrack(activity.window) { frame ->
             if (frame.isJank) {
                 jankyFrames++

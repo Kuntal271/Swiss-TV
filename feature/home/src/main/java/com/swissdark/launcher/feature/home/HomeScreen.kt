@@ -15,6 +15,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
+import com.swissdark.launcher.core.focus.HomePress
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -109,6 +113,10 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
         val idx = keys.indexOf(lastKey[0])
         if (idx >= 0 && idx != focus.focused) focus.focus(idx)
     }
+    // Home pressed while Home is already in front: back to the first Up next card (or first app).
+    LaunchedEffect(focus) {
+        snapshotFlow { HomePress.count.intValue }.drop(1).collect { if (focus.count > 0) focus.focus(0) }
+    }
     focus.onOtherKey = { e ->
         if (e.action != KeyEvent.ACTION_UP) e.keyCode == KeyEvent.KEYCODE_BACK
         else when (e.keyCode) {
@@ -159,7 +167,7 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(7)).enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Label("Up next")
+                        Label("Continue watching")
                         if (up.isEmpty()) {
                             T("Nothing to continue yet — start something and it’ll appear here.", SwissType.Body22, Modifier.padding(vertical = 60.dp))
                         } else Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -198,8 +206,10 @@ private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
 
 @Composable
 private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, status: HomeStatus) {
-    val i = focused.intValue
-    val item = up.getOrNull(if (i < up.size) i else 0)
+    // Derived: a press recomposes the hero only when it lands on a different Up next card,
+    // not on every move between app tiles and links.
+    val heroIndex by remember(up) { derivedStateOf { val i = focused.intValue; if (i < up.size) i else 0 } }
+    val item = up.getOrNull(heroIndex)
     // New card under focus: the hero text fades up from 20 % and slides 12 px in from the right.
     val reduce = LocalReduceMotion.current
     val swap = remember { Animatable(1f) }
@@ -272,6 +282,13 @@ private fun caption(w: PreparedWallpaper): String {
 /** An Up next entry that is just an app (no title, no deep link): OK opens the app itself. */
 fun ContinueItem.isAppOnly(): Boolean = source == ContinueSource.APP || (title == null && intentUri == null)
 
+/**
+ * Something played in an app that never says what (Netflix, Prime Video…): the card is the app.
+ * OK resumes it straight away (live session, else the app); there is no title page to show.
+ * Matches WatchedStore's "<package>|@app" rows.
+ */
+fun ContinueItem.isAppPlayback(): Boolean = source == ContinueSource.WATCHED && title == null && key.endsWith("|@app")
+
 /** Reads focus in its own scope, so a key press recomposes only this line. */
 @Composable
 private fun FooterHint(
@@ -281,7 +298,12 @@ private fun FooterHint(
     apps: List<AppEntry>,
     modifier: Modifier,
 ) {
-    val text = if (hint.isEmpty()) "" else footerHint(focus.engine.focused.intValue, up, apps, hint)
+    // Every focusable's hint is built once per snapshot; a press only picks one, and this line
+    // recomposes only when the picked text actually changes.
+    val hints = remember(up, apps, hint) { Array(up.size + apps.size) { footerHint(it, up, apps, hint) } }
+    val text by remember(hints, hint) {
+        derivedStateOf { if (hint.isEmpty()) "" else hints.getOrNull(focus.engine.focused.intValue) ?: hint }
+    }
     T(text, SwissType.Footer, modifier, Swiss.Muted, maxLines = 1)
 }
 
@@ -291,8 +313,11 @@ private fun footerHint(i: Int, up: List<ContinueItem>, apps: List<AppEntry>, fal
     return when {
         i < nUp -> {
             val item = up[i]
-            if (item.isAppOnly()) "OK opens ${item.serviceName} · Hold OK to remove it from Up next"
-            else "OK for details and resume · Hold OK to remove it from Up next"
+            when {
+                item.isAppPlayback() -> "OK goes back to ${item.serviceName} · Hold OK to remove it"
+                item.isAppOnly() -> "OK opens ${item.serviceName} · Hold OK to remove it"
+                else -> "OK for details and resume · Hold OK to remove it"
+            }
         }
         i < nUp + apps.size -> {
             val a = apps[i - nUp]
