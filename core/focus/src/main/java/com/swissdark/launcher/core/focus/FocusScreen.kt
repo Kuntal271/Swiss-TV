@@ -60,6 +60,7 @@ class FocusScreenState internal constructor(
     private var styles = arrayOfNulls<FocusStyle>(count)
     private var scrolls = BooleanArray(count)
     private var scales = BooleanArray(count)
+    private var scaleTo = FloatArray(count)     // per-item focus scale; 0 = the screen's focusScale
     private var seen = BooleanArray(count)
     /** The live node that registered each index (an item that leaves composition clears only its own slot). */
     private var owners = arrayOfNulls<Any>(count)
@@ -104,6 +105,23 @@ class FocusScreenState internal constructor(
     /** Per-item scale that only notifies when this item's value changes. */
     fun scaleState(index: Int): State<Float> = derivedStateOf { scaleOf(index) }
 
+    /** The scale [i] grows to when focused (1 = it does not scale). */
+    private fun targetScale(i: Int): Float = if (!scales[i]) 1f else if (scaleTo[i] > 0f) scaleTo[i] else focusScale
+
+    /**
+     * 0..1, how focused [index] is: 1 when focused, 0 when not, and in between on the focus
+     * scale's own progress, so a fill or colour fades exactly with the scale. Draw phase only.
+     */
+    fun focusFraction(index: Int): Float {
+        if (index < 0 || index >= count) return 0f
+        val t = targetScale(index)
+        if (t == 1f) return if (engine.focused.intValue == index) 1f else 0f
+        return ((scaleOf(index) - 1f) / (t - 1f)).coerceIn(0f, 1f)
+    }
+
+    /** [focusFraction] as a state that only notifies when this item's value changes. */
+    fun fractionState(index: Int): State<Float> = derivedStateOf { focusFraction(index) }
+
     /**
      * Vertical scroll of the scrolling region. Applied as a canvas translation (draw phase only):
      * a scroll never measures, places or re-registers anything, and the registered rects of
@@ -145,6 +163,7 @@ class FocusScreenState internal constructor(
         styles = arrayOfNulls(newCount)
         scrolls = BooleanArray(newCount)
         scales = BooleanArray(newCount)
+        scaleTo = FloatArray(newCount)
         scaleCur.intValue = -1
         scalePrev.intValue = -1
         seen = BooleanArray(newCount)
@@ -170,7 +189,7 @@ class FocusScreenState internal constructor(
         dirty = true
     }
 
-    internal fun register(owner: Any?, index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false) {
+    internal fun register(owner: Any?, index: Int, c: LayoutCoordinates, style: FocusStyle, scrolling: Boolean, scale: Boolean = false, scaleAmount: Float = 0f) {
         if (index < 0 || index >= count || !c.isAttached) return
         if (owner != null) owners[index] = owner
         // Scrolling is a canvas translation, so layout positions are already unscrolled.
@@ -178,7 +197,7 @@ class FocusScreenState internal constructor(
         val y = p.y
         val o = index * 4
         val w = c.size.width.toFloat(); val h = c.size.height.toFloat()
-        var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || !seen[index]
+        var changed = styles[index] != style || scrolls[index] != scrolling || scales[index] != scale || scaleTo[index] != scaleAmount || !seen[index]
         if (rects[o] != p.x || rects[o + 1] != y || rects[o + 2] != w || rects[o + 3] != h) {
             rects[o] = p.x; rects[o + 1] = y; rects[o + 2] = w; rects[o + 3] = h
             dirty = true
@@ -187,6 +206,7 @@ class FocusScreenState internal constructor(
         styles[index] = style
         scrolls[index] = scrolling
         scales[index] = scale
+        scaleTo[index] = scaleAmount
         seen[index] = true
         // Global layout passes (a scroll, the hero text reflowing) call this for every item.
         // Only a real move of the focused item touches the ring, and a running ring animation
@@ -233,7 +253,7 @@ class FocusScreenState internal constructor(
     private fun ringTarget(i: Int) {
         val o = i * 4
         val dy = if (scrolls[i]) scrollY.floatValue else 0f
-        val s = if (scales[i]) focusScale else 1f
+        val s = targetScale(i)
         val w = rects[o + 2]; val h = rects[o + 3]
         val gx = w * (s - 1f) / 2f; val gy = h * (s - 1f) / 2f
         to[0] = rects[o] - gx; to[1] = rects[o + 1] - dy - gy; to[2] = w + 2 * gx; to[3] = h + 2 * gy
@@ -251,7 +271,7 @@ class FocusScreenState internal constructor(
         val sNew = scaleOf(i)
         prevFrom = if (old != i && old >= 0) scaleOf(old) else 1f
         curFrom = sNew
-        curTo = if (scales[i]) focusScale else 1f
+        curTo = targetScale(i)
         scalePrev.intValue = if (old != i) old else -1
         scaleCur.intValue = i
 
@@ -352,7 +372,7 @@ class FocusScreenState internal constructor(
         if (i < 0 || i >= count || !seen[i]) return
         val o = i * 4
         val dy = if (scrolls[i]) scrollY.floatValue else 0f
-        val s = if (scales[i]) focusScale else 1f
+        val s = targetScale(i)
         val w = rects[o + 2] * s; val h = rects[o + 3] * s
         LaunchOrigin.record(rects[o] - (w - rects[o + 2]) / 2f, rects[o + 1] - dy - (h - rects[o + 3]) / 2f, w, h)
     }
@@ -429,7 +449,9 @@ fun Modifier.focusItem(
     style: FocusStyle = FocusStyle.RING,
     scrolling: Boolean = false,
     scale: Boolean = false,
-): Modifier = this then FocusItemElement(state, index, style, scrolling, scale)
+    /** The focused scale for this item; 0 = the screen's focusScale (1.04). */
+    scaleAmount: Float = 0f,
+): Modifier = this then FocusItemElement(state, index, style, scrolling, scale, scaleAmount)
 
 private data class FocusItemElement(
     val state: FocusScreenState,
@@ -437,9 +459,10 @@ private data class FocusItemElement(
     val style: FocusStyle,
     val scrolling: Boolean,
     val scale: Boolean,
+    val scaleAmount: Float,
 ) : ModifierNodeElement<FocusItemNode>() {
-    override fun create() = FocusItemNode(state, index, style, scrolling, scale)
-    override fun update(node: FocusItemNode) = node.update(state, index, style, scrolling, scale)
+    override fun create() = FocusItemNode(state, index, style, scrolling, scale, scaleAmount)
+    override fun update(node: FocusItemNode) = node.update(state, index, style, scrolling, scale, scaleAmount)
 }
 
 /**
@@ -453,6 +476,7 @@ internal class FocusItemNode(
     private var style: FocusStyle,
     private var scrolling: Boolean,
     private var scale: Boolean,
+    private var scaleAmount: Float,
 ) : Modifier.Node(), GlobalPositionAwareModifierNode {
     private var coords: LayoutCoordinates? = null
 
@@ -465,23 +489,23 @@ internal class FocusItemNode(
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
         coords = coordinates
-        state.register(this, index, coordinates, style, scrolling, scale)
+        state.register(this, index, coordinates, style, scrolling, scale, scaleAmount)
     }
 
-    fun update(state: FocusScreenState, index: Int, style: FocusStyle, scrolling: Boolean, scale: Boolean) {
+    fun update(state: FocusScreenState, index: Int, style: FocusStyle, scrolling: Boolean, scale: Boolean, scaleAmount: Float) {
         if (state !== this.state) {
             this.state.unregister(this, this.index, detach = true)
             state.attach(this)
         } else if (index != this.index) {
             state.unregister(this, this.index, detach = false)
         }
-        this.state = state; this.index = index; this.style = style; this.scrolling = scrolling; this.scale = scale
+        this.state = state; this.index = index; this.style = style; this.scrolling = scrolling; this.scale = scale; this.scaleAmount = scaleAmount
         reRegister()
     }
 
     fun reRegister() {
         val c = coords ?: return
-        if (isAttached && c.isAttached) state.register(this, index, c, style, scrolling, scale)
+        if (isAttached && c.isAttached) state.register(this, index, c, style, scrolling, scale, scaleAmount)
     }
 }
 

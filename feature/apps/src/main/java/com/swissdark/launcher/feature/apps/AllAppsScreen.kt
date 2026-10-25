@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,7 +31,7 @@ import com.swissdark.launcher.core.design.rememberAppear
 import com.swissdark.launcher.core.design.Fmt
 import com.swissdark.launcher.core.design.Frame
 import com.swissdark.launcher.core.design.Header
-import com.swissdark.launcher.core.design.IconTile
+import com.swissdark.launcher.core.design.AppTile
 import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
@@ -55,7 +56,7 @@ class AllAppsActions(
     val back: () -> Unit,
 )
 
-private const val COLS = 4
+private const val COLS = 5
 
 /** A to Z (or your order once you move something). Hidden apps and disabled bloat never show. */
 @Composable
@@ -138,35 +139,27 @@ fun AllAppsScreen(
         Backdrop(wallpaper, totalDim = 0.8f)
         FocusRoot(grid, Swiss.Focus) {
             Frame {
-                Header(deviceName.uppercase(), now.format(Fmt.clock), "${apps.size} apps · $hiddenCount hidden", "All apps")
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
-                    Column(Modifier.width(Swiss.span(3)), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                        T("All\napps", SwissType.Display120)
-                        T(
-                            (if (customOrder) "In your order. " else "A to Z. ") +
-                                "Every app gets a matching outline icon from Tabler Icons. Bloat you disabled never shows.",
-                            SwissType.Body24,
-                        )
-                    }
-                    Box(Modifier.fillMaxHeight().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
-                        Column(Modifier.fillMaxWidth().focusScroll(grid), verticalArrangement = Arrangement.spacedBy(28.dp)) {
-                            for (r in 0 until (apps.size + COLS - 1) / COLS) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                                    for (c in 0 until COLS) {
-                                        val i = r * COLS + c
-                                        val a = apps.getOrNull(i)
-                                        if (a == null) Box(Modifier.weight(1f))
-                                        else IconTile(
-                                            grid, i, a.icon, a.label, 140.dp, Modifier.weight(1f),
-                                            style = SwissType.Card24, iconSize = 56.dp, scrolling = true,
-                                            badge = when {
-                                                moving?.id == a.id -> "Moving"
-                                                a.pinned -> "Pinned"
-                                                else -> null
-                                            },
-                                            outline = moving?.id == a.id,
-                                        )
-                                    }
+                Header(deviceName.uppercase(), now.format(Fmt.clock), (if (customOrder) "Your order" else "A to Z") + " · $hiddenCount hidden", "All apps")
+                T("All apps · ${apps.size}", SwissType.Row44, maxLines = 1)
+                Box(Modifier.fillMaxWidth().weight(1f).enter({ gridIn.value }, dy = 0f).clipToBounds().focusViewport(grid)) {
+                    // 12 px of air above the first row so its ring and scale are never clipped.
+                    Column(Modifier.fillMaxWidth().focusScroll(grid).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                        for (r in 0 until (apps.size + COLS - 1) / COLS) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                                for (c in 0 until COLS) {
+                                    val i = r * COLS + c
+                                    val a = apps.getOrNull(i)
+                                    if (a == null) Box(Modifier.weight(1f))
+                                    else AppTile(
+                                        grid, i, a.id.component, a.icon, a.label, Modifier.weight(1f),
+                                        scrolling = true,
+                                        badge = when {
+                                            moving?.id == a.id -> "Moving"
+                                            a.pinned -> "Pinned"
+                                            else -> null
+                                        },
+                                        outline = moving?.id == a.id,
+                                    )
                                 }
                             }
                         }
@@ -178,14 +171,14 @@ fun AllAppsScreen(
                     val pop = rememberAppear(m, Motion.SHORT)
                     FocusRoot(menu, Swiss.Focus) {
                         Row(
-                            Modifier.fillMaxWidth().drawPop({ pop.value }).topRule(4.dp, Swiss.Focus).background(Swiss.Panel).padding(horizontal = 24.dp, vertical = 18.dp),
+                            Modifier.fillMaxWidth().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(horizontal = 24.dp, vertical = 18.dp),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(48.dp),
                         ) {
                             Label(m.label, color = Swiss.Ink, modifier = Modifier.weight(1f))
-                            TabText(menu, 0, if (m.pinned) "Unpin from Home" else "Pin to Home", false, SwissType.Row28, Swiss.Ink)
-                            TabText(menu, 1, "Hide", false, SwissType.Row28, Swiss.Ink)
-                            TabText(menu, 2, "Move", false, SwissType.Row28, Swiss.Ink)
-                            TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink)
+                            TabText(menu, 0, if (m.pinned) "Unpin from Home" else "Pin to Home", false, SwissType.Row28, Swiss.Ink, marker = false)
+                            TabText(menu, 1, "Hide", false, SwissType.Row28, Swiss.Ink, marker = false)
+                            TabText(menu, 2, "Move", false, SwissType.Row28, Swiss.Ink, marker = false)
+                            TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false)
                         }
                     }
                 } else {

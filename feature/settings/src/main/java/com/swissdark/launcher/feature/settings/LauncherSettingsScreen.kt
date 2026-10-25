@@ -48,10 +48,10 @@ import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.RuleRow
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
-import com.swissdark.launcher.core.design.FocusRuleRow
 import com.swissdark.launcher.core.design.T
 import com.swissdark.launcher.core.design.TDraw
-import com.swissdark.launcher.core.design.rememberRowFocus
+import com.swissdark.launcher.core.design.focusFill
+import com.swissdark.launcher.core.design.rememberFocusInk
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.ColorProducer
@@ -89,6 +89,8 @@ class SettingsInfo(
     val watchNext: String,
     val tmdb: Boolean,
     val photosPath: String,
+    /** Installed icon packs, package to label. */
+    val iconPacks: List<Pair<String, String>> = emptyList(),
     val titleSource: String = "TMDB",                 // "TMDB", "OMDb + TVmaze" or "TVmaze"
 )
 
@@ -100,7 +102,7 @@ class SettingsActions(
     val back: () -> Unit,
 )
 
-private val sections = listOf("Home", "Wallpaper", "Up next", "Apps", "Remote", "About")
+private val sections = listOf("Home", "Wallpaper", "Services", "Apps", "Remote", "About")
 
 @Composable
 fun LauncherSettingsScreen(
@@ -123,7 +125,7 @@ fun LauncherSettingsScreen(
         0 -> homeSection(settings, actions)
         1 -> wallpaperSection(settings, catalog, slot, { slot = it }, actions, info)
         2 -> servicesSection(settings, actions)
-        3 -> appsSection(settings, allApps, actions)
+        3 -> appsSection(settings, allApps, actions, info.iconPacks)
         4 -> remoteSection(info)
         else -> aboutSection(info)
     }
@@ -176,9 +178,8 @@ fun LauncherSettingsScreen(
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                     Column(Modifier.width(Swiss.span(3))) {
                         for ((i, s) in sections.withIndex()) {
-                            val sel = i == section
-                            FocusRuleRow(focus, i, bottomRule = i == sections.lastIndex, selected = sel, vertical = 18.dp) { f ->
-                                TDraw(s, SwissType.Row34, if (sel) AmberColor else f.ink)
+                            RuleRow(focus, i, bottomRule = i == sections.lastIndex, selected = i == section, vertical = 18.dp) { c ->
+                                TDraw(s, SwissType.Row34, c.ink, maxLines = 1)
                             }
                         }
                     }
@@ -202,7 +203,6 @@ private const val SECTION_DWELL_MS = 350L
 
 private val footerKeys = listOf(KeyHint("Back", "Home"))
 
-private val AmberColor = ColorProducer { Swiss.Focus }
 
 /** The section row under focus and its pending switch (plain fields: touched from key handling only). */
 private class SectionNav {
@@ -233,17 +233,17 @@ private class SectionContent(
 
 @Composable
 private fun ValueRow(focus: FocusScreenState, index: Int, label: String, value: String, last: Boolean = false) {
-    FocusRuleRow(focus, index, bottomRule = last, vertical = 18.dp, scrolling = true) { f ->
-        TDraw(label, SwissType.Row30, f.ink, Modifier.weight(1f), maxLines = 1)
-        T(value, SwissType.Value26, color = Swiss.Focus, maxLines = 1)
+    RuleRow(focus, index, bottomRule = last, vertical = 18.dp, scrolling = true) { c ->
+        TDraw(label, SwissType.Row30, c.ink, Modifier.weight(1f), maxLines = 1)
+        TDraw(value, SwissType.Value, c.ink, maxLines = 1)
     }
 }
 
 @Composable
 private fun InfoRow(label: String, value: String, last: Boolean = false) {
-    Row(Modifier.fillMaxWidth().topRule().let { if (last) it.bottomRule() else it }.padding(vertical = 18.dp)) {
+    Row(Modifier.fillMaxWidth().topRule().let { if (last) it.bottomRule() else it }.padding(horizontal = 24.dp, vertical = 18.dp)) {
         T(label, SwissType.Row30, Modifier.weight(1f), maxLines = 1)
-        T(value, SwissType.Value26, color = Swiss.Muted, maxLines = 1)
+        T(value, SwissType.Value, color = Swiss.Muted, maxLines = 1)
     }
 }
 
@@ -261,7 +261,7 @@ private fun homeSection(s: LauncherSettings, a: SettingsActions) = SectionConten
     },
 ) { f, base ->
     Column {
-        ValueRow(f, base, "Show Up next", onOff(s.showUpNext))
+        ValueRow(f, base, "Show Continue watching", onOff(s.showUpNext))
         ValueRow(f, base + 1, "Key latency overlay", onOff(s.showLatencyOverlay))
         InfoRow("Apps on Home", "6, by habit · pinned first")
         InfoRow("Clock", "24-hour", last = true)
@@ -306,9 +306,9 @@ private fun wallpaperSection(
                     Thumb(f, base + k, wp, 150, a, Modifier.weight(1f), selected = sl == slot) {
                         Row {
                             T(sl.label, SwissType.Card)
-                            if (sl == nowSlot) T(" · now", SwissType.Card, color = Swiss.Focus)
+                            if (sl == nowSlot) T(" · now", SwissType.Card, color = Swiss.Muted)
                         }
-                        T("${sl.range} · ${wp?.name ?: "none"}", SwissType.Meta18, maxLines = 1)
+                        T("${sl.range} · ${wp?.name ?: "none"}", SwissType.Meta, maxLines = 1)
                     }
                 }
             }
@@ -324,7 +324,7 @@ private fun wallpaperSection(
                             val wp = picks[k]
                             val chosen = s.wallpaperBySlot[slot.name] == wp.id
                             Thumb(f, base + 4 + k, wp, 96, a, Modifier.weight(1f), selected = chosen) {
-                                T(wp.name, SwissType.Tile22, color = if (chosen) Swiss.Focus else Swiss.Ink, maxLines = 1)
+                                T(wp.name, SwissType.Tile, color = if (chosen) Swiss.Ink else Swiss.Muted, maxLines = 1)
                             }
                         }
                         k == picks.size -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -333,19 +333,19 @@ private fun wallpaperSection(
                                     .background(Swiss.Well).border(1.dp, Swiss.Dashed),
                                 contentAlignment = Alignment.Center,
                             ) { T("+", SwissType.Row44.copy(fontSize = SwissType.Row44.fontSize), color = Swiss.Muted) }
-                            T("Your photos", SwissType.Tile22)
+                            T("Your photos", SwissType.Tile)
                         }
                         else -> Box(Modifier.weight(1f))
                     }
                 }
             }
-            T("Add your own: adb push photos to ${info.photosPath}, then pick +.", SwissType.Meta18)
+            T("Add your own: adb push photos to ${info.photosPath}, then pick +.", SwissType.Meta)
         }
         val dim = s.dimBySlot[slot.name] ?: 0.45f
         Row(Modifier.fillMaxWidth().topRule().bottomRule(), verticalAlignment = Alignment.CenterVertically) {
             T("Darken wallpaper", SwissType.Row30, Modifier.weight(1f).padding(vertical = 18.dp))
             StepButton(f, base + 4 + nPick, "−")
-            T("${(dim * 100).roundToInt()}%", SwissType.Value26, Modifier.padding(horizontal = 24.dp), Swiss.Focus)
+            T("${(dim * 100).roundToInt()}%", SwissType.Value, Modifier.padding(horizontal = 24.dp), Swiss.Ink)
             StepButton(f, base + 5 + nPick, "+")
         }
     }
@@ -353,15 +353,11 @@ private fun wallpaperSection(
 
 @Composable
 private fun StepButton(f: FocusScreenState, index: Int, text: String) {
-    val rf = rememberRowFocus(f, index)
+    val ink = rememberFocusInk(f, index)
     TDraw(
-        text, SwissType.Row30, rf.ink,
-        Modifier.focusItem(f, index, FocusStyle.SELF, scrolling = true)
-            .drawBehind {
-                val w = 2.dp.toPx()
-                drawRect(if (rf.focused.value) Swiss.Focus else Swiss.Rule, Offset(w / 2f, w / 2f), Size(size.width - w, size.height - w), style = Stroke(w))
-            }
-            .padding(horizontal = 20.dp, vertical = 4.dp),
+        text, SwissType.Row30, ink.ink,
+        Modifier.focusFill(f, index, ink, scrolling = true).border(2.dp, Swiss.Rule).padding(horizontal = 24.dp, vertical = 6.dp),
+        maxLines = 1,
     )
 }
 
@@ -395,7 +391,7 @@ private fun Thumb(
                     val s = sel.value
                     if (s > 0f) {
                         val w = 4.dp.toPx(); val rw = size.width * s
-                        drawRect(Swiss.Focus, Offset((size.width - rw) / 2f, size.height - w), Size(rw, w))
+                        drawRect(Swiss.Ink, Offset((size.width - rw) / 2f, size.height - w), Size(rw, w))
                     }
                 },
         ) {
@@ -428,21 +424,31 @@ private fun servicesSection(s: LauncherSettings, a: SettingsActions) = SectionCo
             ValueRow(f, base + k, p.name + if (key == "youtube") " Premium" else "", if (key in s.myServices) "In my plan" else "—")
         }
         ValueRow(f, base + serviceKeys.size, "Clear when TV turns off", onOff(s.clearContinueOnOff))
-        ValueRow(f, base + serviceKeys.size + 1, "Bring back removed Up next items", "${s.removedUpNext.size} removed", last = true)
+        ValueRow(f, base + serviceKeys.size + 1, "Bring back removed Continue watching", "${s.removedUpNext.size} removed", last = true)
     }
 }
 
-private fun appsSection(s: LauncherSettings, apps: List<AppEntry>, a: SettingsActions) = SectionContent(
-    count = apps.size + 1,
+private fun appsSection(s: LauncherSettings, apps: List<AppEntry>, a: SettingsActions, packs: List<Pair<String, String>>) = SectionContent(
+    count = apps.size + 2,
     click = { i ->
-        if (i < apps.size) {
-            val pkg = apps[i].id.packageName
-            a.update { it.copy(hidden = if (pkg in it.hidden) it.hidden - pkg else it.hidden + pkg) }
-        } else a.update { it.copy(customOrder = emptyList()) }
+        when {
+            i < apps.size -> {
+                val pkg = apps[i].id.packageName
+                a.update { it.copy(hidden = if (pkg in it.hidden) it.hidden - pkg else it.hidden + pkg) }
+            }
+            i == apps.size -> a.update { it.copy(customOrder = emptyList()) }
+            else -> {
+                // OK steps through: app logos, then each installed pack.
+                val options = listOf("") + packs.map { it.first }
+                a.update { cur -> cur.copy(iconPack = options[(options.indexOf(cur.iconPack) + 1).mod(options.size)]) }
+            }
+        }
     },
 ) { f, base ->
     Column {
         Label("OK shows or hides an app. Hidden apps stay installed.", Modifier.padding(bottom = 12.dp))
+        val packName = packs.firstOrNull { it.first == s.iconPack }?.second ?: "App logos (default)"
+        ValueRow(f, base + apps.size + 1, "Icon pack", if (packs.isEmpty()) "App logos · no packs installed" else packName)
         ValueRow(f, base + apps.size, "All apps order", if (s.customOrder.isEmpty()) "A to Z" else "Yours · OK resets")
         for ((k, app) in apps.withIndex()) {
             ValueRow(f, base + k, app.label, if (app.id.packageName in s.hidden) "Hidden" else "Shown", last = k == apps.lastIndex)
@@ -456,8 +462,8 @@ private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
         InfoRow("Google TV Home", "Off · UNDO=1 ./setup/setup.sh restores it")
         InfoRow("Mic", "Google Assistant · Search here: Mic")
         InfoRow("Input", "Inputs panel")
-        InfoRow("Settings", "Quick settings panel")
-        InfoRow("Back on Home", "Does nothing", last = true)
+        InfoRow("Menu", "Quick settings · hold: Launcher settings")
+        InfoRow("Back on Home", "First card, then Search", last = true)
     }
 }
 
@@ -475,9 +481,9 @@ private fun aboutSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
         T(
             (if (info.titleSource == "TMDB") "Titles and artwork: TMDB. Where to watch: JustWatch. "
             else "Titles: ${info.titleSource} (TMDB is used when its key works). Where to watch: TVmaze channels, approximate. ") +
-                "Icons: Tabler Icons (MIT). Type: Archivo (OFL). " +
+                "Icons: Tabler Icons (MIT). Type: Inter (OFL). " +
                 "This product uses the TMDB API but is not endorsed or certified by TMDB.",
-            SwissType.Body22, Modifier.padding(top = 24.dp),
+            SwissType.Body, Modifier.padding(top = 24.dp),
         )
     }
 }

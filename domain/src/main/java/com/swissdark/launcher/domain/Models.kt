@@ -196,6 +196,7 @@ data class LauncherSettings(
     val omdbKey: String = "",                          // OMDb key: titles without a working TMDB key
     val clearContinueOnOff: Boolean = true,            // empty Continue watching when the TV goes to standby / boots
     val continueClearedAt: Long = 0L,                  // last clear: Watch Next rows engaged before it stay hidden
+    val iconPack: String = "",                         // icon pack package; "" = the apps' own logos
 )
 
 /** TCL utilities that clutter the app list. Hidden, not disabled; unhide in Launcher settings › Apps. */

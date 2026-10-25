@@ -38,6 +38,7 @@ import com.swissdark.launcher.core.design.RuleRow
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
 import com.swissdark.launcher.core.design.T
+import com.swissdark.launcher.core.design.TDraw
 import com.swissdark.launcher.core.design.rememberMinute
 import com.swissdark.launcher.core.focus.FocusRoot
 import com.swissdark.launcher.core.focus.rememberFocusScreen
@@ -98,7 +99,7 @@ fun UpNextTitleScreen(
                                 item.source == com.swissdark.launcher.domain.ContinueSource.WATCHED -> "Continue watching"
                                 else -> "Last used"
                             }
-                            Label(label, color = Swiss.Focus)
+                            Label(label, color = Swiss.Ink)
                             T(item.name, SwissType.Title84, maxLines = 3)
                             T(details?.synopsis?.takeIf { it.isNotBlank() } ?: item.meta, SwissType.Body26, maxLines = 3)
                             val p = item.progress
@@ -218,7 +219,7 @@ fun TitleDetailsScreen(
                             Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.Top) {
                                 if (poster != null) Art(poster, 180, 270, Modifier.size(180.dp, 270.dp))
                                 Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
-                                    Label(bits.joinToString(" · "), color = Swiss.Focus)
+                                    Label(bits.joinToString(" · "), color = Swiss.Ink)
                                     T(details?.ref?.name ?: ref.name, if (poster != null) SwissType.Title84 else SwissType.Title92, maxLines = 3)
                                 }
                             }
@@ -246,8 +247,8 @@ fun TitleDetailsScreen(
                             Row(Modifier.widthIn(max = 820.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                                 for (p in cast) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Initial(p.name, Modifier.fillMaxWidth().height(96.dp), SwissType.Row30)
-                                    T(p.name, SwissType.Small20, maxLines = 1)
-                                    T(p.role, SwissType.Meta16, maxLines = 1)
+                                    T(p.name, SwissType.Tile, maxLines = 1)
+                                    T(p.role, SwissType.Meta, maxLines = 1)
                                 }
                                 repeat(4 - cast.size) { Box(Modifier.weight(1f)) }
                             }
@@ -258,25 +259,25 @@ fun TitleDetailsScreen(
                         Modifier.width(Swiss.span(5)).fillMaxHeight().background(Swiss.Panel).border(2.dp, Swiss.Rule).padding(horizontal = 36.dp, vertical = 32.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Label("Where to watch in India", color = Swiss.Focus)
+                        Label("Where to watch in India", color = Swiss.Ink)
                         if (rows.isEmpty()) {
                             T(
                                 when {
                                     details == null -> "…"
                                     details.source == "TMDB" -> "Not streaming, renting or selling in India right now."
-                                    ref.type == MediaType.MOVIE -> "Where to watch isn’t known for films without a TMDB key."
+                                    ref.type == MediaType.MOVIE -> "Where to watch isn’t known for this film."
                                     else -> "No Indian service listed for this series on TVmaze."
                                 },
-                                SwissType.Body22, Modifier.padding(top = 14.dp),
+                                SwissType.Body, Modifier.padding(top = 14.dp),
                             )
                         }
-                        if (stream.isNotEmpty()) Label("Stream", Modifier.padding(top = 14.dp), style = SwissType.Label18)
+                        if (stream.isNotEmpty()) Label("Stream", Modifier.padding(top = 14.dp), style = SwissType.Label)
                         for ((k, a) in stream.withIndex()) WatchRow(focus, buttons.size + k, a, last = k == stream.lastIndex && rentBuy.isEmpty())
-                        if (rentBuy.isNotEmpty()) Label("Rent or buy", Modifier.padding(top = 18.dp), style = SwissType.Label18)
+                        if (rentBuy.isNotEmpty()) Label("Rent or buy", Modifier.padding(top = 18.dp), style = SwissType.Label)
                         for ((k, a) in rentBuy.withIndex()) WatchRow(focus, buttons.size + stream.size + k, a, last = k == rentBuy.lastIndex)
                         val eps = details?.nextEpisodes.orEmpty()
                         if (eps.isNotEmpty() && rows.size <= 3) {
-                            Label("Season ${eps.first().season} · ${eps.size} episodes", Modifier.padding(top = 28.dp), style = SwissType.Label18)
+                            Label("Season ${eps.first().season} · ${eps.size} episodes", Modifier.padding(top = 28.dp), style = SwissType.Label)
                             for (e in eps.takeLast(4).asReversed()) {
                                 T("E${e.number} · ${e.name}" + (e.runtimeMin?.let { " · ${durationText(it)}" } ?: ""), SwissType.Meta, maxLines = 1)
                             }
@@ -284,9 +285,9 @@ fun TitleDetailsScreen(
                         Box(Modifier.weight(1f))
                         T(
                             if (details == null || details.source == "TMDB") "Updated daily. Prices are set by each service and may differ in the app."
-                            else if (ref.type == MediaType.MOVIE) "Add a working TMDB key for where-to-watch on films."
-                            else "From the series’ channel on TVmaze, so a rough guide. Add a TMDB key for full where-to-watch.",
-                            SwissType.Meta18,
+                            else if (ref.type == MediaType.MOVIE) ""
+                            else "From the series’ channel on TVmaze, so a rough guide.",
+                            SwissType.Meta,
                         )
                     }
                 }
@@ -309,14 +310,14 @@ private fun WatchRow(focus: com.swissdark.launcher.core.focus.FocusScreenState, 
         Kind.RENT -> Triple("Rent ${a.priceInr?.let { "₹$it" } ?: "· price in app"} · 48 h to finish", "Rent", true)
         Kind.BUY -> Triple("Buy ${a.priceInr?.let { "₹$it" } ?: "· price in app"} · keep forever", "Buy", false)
     }
-    RuleRow(focus, index, bottomRule = last, vertical = 16.dp) { focused ->
+    RuleRow(focus, index, bottomRule = last, vertical = 16.dp) { c ->
         Box(Modifier.size(88.dp, 50.dp).background(Color(a.brandColor)).border(1.dp, Color(0xFF333338)))
         Box(Modifier.width(24.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            T(a.providerName, SwissType.Row32, color = if (focused) Swiss.Focus else Swiss.Ink, maxLines = 1)
-            T(detail, SwissType.Meta, color = if (strong) Swiss.Ink else Swiss.Muted, maxLines = 1)
+            TDraw(a.providerName, SwissType.Row32, c.ink, maxLines = 1)
+            TDraw(detail, SwissType.Meta, if (strong) c.ink else c.muted, maxLines = 1)
         }
-        T(action, SwissType.Card24, color = if (focused) Swiss.Focus else if (strong) Swiss.Ink else Swiss.Muted)
+        TDraw(action, SwissType.Card, if (strong) c.ink else c.muted, maxLines = 1)
     }
 }
 
