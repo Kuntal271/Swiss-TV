@@ -334,6 +334,7 @@ private const val ENTRANCE_MS = 300
 private const val GROUP_MS = 180
 private const val GROUP_STEP = 30
 private const val FROM_ALPHA = 0.35f
+private const val HERO_SLIDE = 36f
 
 /** Group k's eased 0..1 progress inside the shared entrance timeline. */
 private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
@@ -368,10 +369,16 @@ private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueIt
         shownKey[0] = key
         if (changed && !reduce) {
             swap.snapTo(0f)
-            swap.animateTo(1f, Motion.enter(Motion.MEDIUM))
+            swap.animateTo(1f, Motion.enter(Motion.LONG))
         }
     }
-    Column(Modifier.fillMaxWidth().enter({ swap.value }, dx = 12f, dy = 0f, fromAlpha = 0.2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // The text arrives from the side focus came from: moving right slides it in from the right.
+    val heroDx = remember { floatArrayOf(0f, HERO_SLIDE) }
+    if (heroIndex != heroDx[0].toInt()) {
+        heroDx[1] = if (heroIndex > heroDx[0].toInt()) HERO_SLIDE else -HERO_SLIDE
+        heroDx[0] = heroIndex.toFloat()
+    }
+    Column(Modifier.fillMaxWidth().enter({ swap.value }, dx = heroDx[1], dy = 0f, fromAlpha = 0.2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!status.isHome) {
             Label("A TV update reset Home — run setup again.", color = Swiss.Ink)
         }

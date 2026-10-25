@@ -363,7 +363,7 @@ class FocusScreenState internal constructor(
         progress.floatValue = 0f
         animJob = scope.launch {
             anim.snapTo(0f)
-            anim.animateTo(1f, tween(120, easing = FastOutSlowInEasing)) {
+            anim.animateTo(1f, tween(RING_MS, easing = ScrollEasing)) {
                 val t = value
                 progress.floatValue = t
                 if (ringMoves) {
@@ -467,6 +467,7 @@ class FocusScreenState internal constructor(
     private companion object {
         const val EDGE = 24f
         const val PEEK = 120f
+        const val RING_MS = 180
         const val SCROLL_MS = 320
         const val SCROLL_HELD_MS = 90
         val ScrollEasing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)

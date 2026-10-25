@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.swissdark.launcher.domain.PreparedWallpaper
@@ -31,10 +32,10 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
-/** 600 ms, like the wallpaper slot cross-fade. */
-const val FOCUS_BACKDROP_MS = 600
+/** Cross-fade of the title art; the incoming art also settles from 1.06x to 1x over it. */
+const val FOCUS_BACKDROP_MS = 450
 /** Focus must rest this long on a card before its art is loaded/shown. */
-const val FOCUS_BACKDROP_DEBOUNCE_MS = 250L
+const val FOCUS_BACKDROP_DEBOUNCE_MS = 150L
 
 /**
  * The wallpaper, with the focused title's art cross-faded over it ([focusedArt] null = wallpaper).
@@ -71,7 +72,7 @@ fun FocusBackdrop(
             }
             layers.cur.value = target
             layers.t.snapTo(0f)
-            layers.t.animateTo(1f, if (reduce) snap() else tween(FOCUS_BACKDROP_MS, 0, Motion.StandardEasing))
+            layers.t.animateTo(1f, if (reduce) snap() else tween(FOCUS_BACKDROP_MS, 0, Motion.EnterEasing))
             layers.prev.value = null
         }
     }
@@ -86,7 +87,10 @@ fun FocusBackdrop(
                     if (a > 0f) drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = a, filterQuality = FilterQuality.Low)
                 }
                 layers.cur.value?.let { b ->
-                    if (t > 0f) drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = t, filterQuality = FilterQuality.Low)
+                    // The new art eases in from slightly zoomed, so a change feels like a camera settling.
+                    if (t > 0f) scale(1f + 0.06f * (1f - t), androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)) {
+                        drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = t, filterQuality = FilterQuality.Low)
+                    }
                 }
                 // Title art is brighter than our wallpapers: shade the left (clock, hero) and the
                 // bottom (rows, key hints) so text stays readable, fading with the art itself.
