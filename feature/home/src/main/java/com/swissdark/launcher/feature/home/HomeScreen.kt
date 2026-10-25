@@ -78,9 +78,11 @@ class HomeStatus(val deviceName: String, val network: String, val isHome: Boolea
 /** Top navigation: glyph + label. Index order = focus order after the content. */
 private val links = listOf("search" to "Search", "grid" to "All apps", "monitor" to "Inputs", "adjustments" to "Settings")
 
-/** Two rows of four, by habit. */
-private const val APP_COLS = 4
+/** Two rows of three, by habit. */
+private const val APP_COLS = 3
 private const val APP_ROWS = 2
+/** Tile width: three 16:9 tiles fit span 6 and two rows fit under the clock and hero. */
+private val APP_TILE_W = 212.dp
 
 /**
  * Home. One screen for all four times of day: only the wallpaper and the habit ranking change.
@@ -185,45 +187,47 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
     Box(Modifier.fillMaxSize()) {
         Backdrop(wallpaper)
         FocusRoot(focus, Swiss.Focus) {
-            Frame {
+            // The Frame's margins with tighter row gaps: header, clock + hero, the band, key hints.
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = Swiss.MARGIN_X.dp, vertical = Swiss.MARGIN_Y.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
                 Box(Modifier.enter(g0, dy = 0f, fromAlpha = FROM_ALPHA)) {
                     HomeHeader(focus, navBase, status)
                 }
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
-                    // Clock, date, hero, caption
-                    Column(
-                        Modifier.width(Swiss.span(4)).fillMaxHeight().enter(g1, fromAlpha = FROM_ALPHA),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CrossfadeText(now.format(Fmt.clock), SwissType.Clock)
-                            Label(now.format(Fmt.longDate))
+                // Clock, date and the hero under them on the left; the wallpaper caption bottom right.
+                Row(Modifier.fillMaxWidth().weight(1f).enter(g1, fromAlpha = FROM_ALPHA), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
+                    Column(Modifier.width(Swiss.span(6)), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // The date sits beside the clock, on its baseline, to leave room for the hero.
+                        Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                            CrossfadeText(now.format(Fmt.clock), SwissType.Clock, Modifier.alignByBaseline())
+                            Label(now.format(Fmt.longDate), Modifier.alignByBaseline())
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
-                            Hero(focus.engine.focused, up, status)
-                            caption(wallpaper)?.let { T(it, SwissType.Meta, maxLines = 1) }
-                        }
+                        Hero(focus.engine.focused, up, apps, status)
                     }
-                    // Continue watching (only when there is something), then apps.
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+                    Box(Modifier.fillMaxHeight().weight(1f), contentAlignment = Alignment.BottomEnd) {
+                        caption(wallpaper)?.let { T(it, SwissType.Meta, maxLines = 1) }
+                    }
+                }
+                // One band, both labels on one line: Continue watching left, apps by habit right.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp), verticalAlignment = Alignment.Top) {
+                    Column(Modifier.width(Swiss.span(6)).enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         if (nUp > 0) {
-                            Column(Modifier.enter(g2, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                                Label("Continue watching")
-                                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                                    for ((i, item) in up.withIndex()) {
-                                        PosterCard(
-                                            focus, i, item.artKey, 140.dp, item.name, null,
-                                            Modifier.weight(1f), progress = item.progress,
-                                        )
-                                    }
-                                    repeat(3 - up.size) { Box(Modifier.weight(1f)) }
+                            Label("Continue watching")
+                            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                                for ((i, item) in up.withIndex()) {
+                                    PosterCard(
+                                        focus, i, item.artKey, 146.dp, item.name, null,
+                                        Modifier.weight(1f), progress = item.progress,
+                                    )
                                 }
+                                repeat(3 - up.size) { Box(Modifier.weight(1f)) }
                             }
                         }
-                        Column(Modifier.enter(g3, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Label("Apps · by habit at %02d:00".format(snapshot.habitHour))
-                            AppsGrid(focus, apps, nUp)
-                        }
+                    }
+                    Column(Modifier.weight(1f).enter(g3, dy = 0f, fromAlpha = FROM_ALPHA), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Label("Apps · by habit at %02d:00".format(snapshot.habitHour))
+                        AppsGrid(focus, apps, nUp)
                     }
                 }
                 Box(Modifier.enter(g4, dy = 0f, fromAlpha = FROM_ALPHA)) {
@@ -266,16 +270,17 @@ private fun group(t: Animatable<Float, *>, k: Int): () -> Float = {
 }
 
 @Composable
-private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, status: HomeStatus) {
-    // Derived: a press recomposes the hero only when it lands on a different Up next card,
-    // not on every move between app tiles and links.
-    val heroIndex by remember(up) { derivedStateOf { val i = focused.intValue; if (i < up.size) i else 0 } }
+private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueItem>, apps: List<AppEntry>, status: HomeStatus) {
+    // Derived: a press recomposes the hero only when it lands on a different card. With nothing
+    // to continue, it names the focused app instead (the first one while focus is in the nav).
+    val heroIndex by remember(up) { derivedStateOf { val i = focused.intValue; if (i < up.size) i else if (up.isNotEmpty()) 0 else i } }
     val item = up.getOrNull(heroIndex)
+    val app = if (up.isEmpty()) apps.getOrNull(heroIndex) ?: apps.firstOrNull() else null
     // New card under focus: the hero text fades up from 20 % and slides 12 px in from the right.
     val reduce = LocalReduceMotion.current
     val swap = remember { Animatable(1f) }
     val shownKey = remember { arrayOfNulls<String>(1) }
-    val key = item?.key
+    val key = item?.key ?: app?.id?.component
     LaunchedEffect(key) {
         val changed = shownKey[0] != null && shownKey[0] != key
         shownKey[0] = key
@@ -284,32 +289,36 @@ private fun Hero(focused: androidx.compose.runtime.IntState, up: List<ContinueIt
             swap.animateTo(1f, Motion.enter(Motion.MEDIUM))
         }
     }
-    Column(Modifier.fillMaxWidth().enter({ swap.value }, dx = 12f, dy = 0f, fromAlpha = 0.2f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxWidth().enter({ swap.value }, dx = 12f, dy = 0f, fromAlpha = 0.2f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!status.isHome) {
             Label("A TV update reset Home — run setup again.", color = Swiss.Ink)
         }
         if (item != null) {
             val h = item.hero()
             Label(h.label, color = Swiss.Ink)
-            T(h.title, SwissType.Hero, maxLines = 2)
-            T(h.meta, SwissType.Meta, maxLines = 2)
+            T(h.title, SwissType.Hero, maxLines = 1)
+            T(h.meta, SwissType.Meta, maxLines = 1)
             if (h.progress != null) ProgressBar(h.progress!!, Swiss.Ink)
+        } else if (app != null) {
+            Label("Apps · by habit", color = Swiss.Ink)
+            T(app.label, SwissType.Hero, maxLines = 1)
+            T(if (app.pinned) "Pinned to Home" else "OK opens it", SwissType.Meta, maxLines = 1)
         }
     }
 }
 
 @Composable
 private fun AppsGrid(focus: FocusScreenState, apps: List<AppEntry>, base: Int) {
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         for (row in 0 until APP_ROWS) {
             if (row * APP_COLS >= apps.size) break
             Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 for (col in 0 until APP_COLS) {
                     val k = row * APP_COLS + col
                     val a = apps.getOrNull(k)
-                    if (a == null) Box(Modifier.weight(1f)) else AppTile(
+                    if (a == null) Box(Modifier.width(APP_TILE_W)) else AppTile(
                         focus, base + k, a.id.component, a.icon, a.label,
-                        Modifier.weight(1f),
+                        Modifier.width(APP_TILE_W),
                         badge = if (a.pinned) "Pin" else null,
                     )
                 }

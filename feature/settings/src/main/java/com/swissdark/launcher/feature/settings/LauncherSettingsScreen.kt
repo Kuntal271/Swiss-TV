@@ -263,7 +263,7 @@ private fun homeSection(s: LauncherSettings, a: SettingsActions) = SectionConten
     Column {
         ValueRow(f, base, "Show Continue watching", onOff(s.showUpNext))
         ValueRow(f, base + 1, "Key latency overlay", onOff(s.showLatencyOverlay))
-        InfoRow("Apps on Home", "8, by habit · pinned first")
+        InfoRow("Apps on Home", "6, by habit · pinned first")
         InfoRow("Clock", "24-hour", last = true)
     }
 }

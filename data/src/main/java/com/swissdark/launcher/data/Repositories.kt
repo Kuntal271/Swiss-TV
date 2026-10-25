@@ -231,7 +231,7 @@ class HomeRepositoryImpl(
         val visible = apps.visible()
         val byPkg = visible.associateBy { it.id.packageName }
         val ranked = habits.rank(visible.map { it.id.packageName }, s.pinned, now)
-            .mapNotNull { byPkg[it] }.take(8)
+            .mapNotNull { byPkg[it] }.take(6)
 
         val removed = s.removedUpNext.toHashSet()
         val items = ArrayList<ContinueItem>(3)
