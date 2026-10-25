@@ -20,6 +20,7 @@ import com.swissdark.launcher.core.focus.HomePress
 import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -207,7 +208,10 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                         Hero(focus.engine.focused, up, apps, status)
                     }
                     Box(Modifier.fillMaxHeight().weight(1f), contentAlignment = Alignment.BottomEnd) {
-                        caption(wallpaper)?.let { T(it, SwissType.Meta, maxLines = 1) }
+                        // The wallpaper's caption is wrong while a Continue watching card's art fills the background.
+                        caption(wallpaper)?.let {
+                            T(it, SwissType.Meta, Modifier.graphicsLayer { alpha = if (focus.engine.focused.intValue < up.size) 0f else 1f }, maxLines = 1)
+                        }
                     }
                 }
                 // One band, both labels on one line: Continue watching left, apps by habit right.

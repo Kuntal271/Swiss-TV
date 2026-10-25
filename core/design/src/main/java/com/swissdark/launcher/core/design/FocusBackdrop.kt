@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -75,6 +76,25 @@ fun FocusBackdrop(wallpaper: PreparedWallpaper?, focusedArt: State<ImageBitmap?>
                 }
                 layers.cur.value?.let { b ->
                     if (t > 0f) drawImage(b, IntOffset.Zero, IntSize(b.width, b.height), IntOffset.Zero, dst, alpha = t, filterQuality = FilterQuality.Low)
+                }
+                // Title art is brighter than our wallpapers: shade the left (clock, hero) and the
+                // bottom (rows, key hints) so text stays readable, fading with the art itself.
+                val art = if (layers.cur.value != null) t else layers.prevFrom * (1f - t)
+                if (art > 0f) {
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            0f to Color.Black.copy(alpha = 0.72f * art),
+                            0.55f to Color.Black.copy(alpha = 0.25f * art),
+                            1f to Color.Transparent,
+                        ),
+                    )
+                    drawRect(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0.45f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.78f * art),
+                            startY = 0f, endY = size.height,
+                        ),
+                    )
                 }
             },
         )

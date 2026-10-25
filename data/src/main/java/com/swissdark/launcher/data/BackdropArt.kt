@@ -305,7 +305,7 @@ class BackdropArt(
         private const val SMALL_H = 540
         private const val WASH_W = 192
         private const val WASH_H = 108
-        private const val MIN_DIM = 0.55f
+        private const val MIN_DIM = 0.62f
         private const val MISS_TTL_MS = 24 * 60 * 60_000L
     }
 }
