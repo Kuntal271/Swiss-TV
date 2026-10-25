@@ -19,6 +19,7 @@ import androidx.compose.runtime.snapshotFlow
 import com.swissdark.launcher.core.focus.HomePress
 import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -233,6 +234,13 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
         com.swissdark.launcher.core.design.FocusBackdrop(
             wallpaper, com.swissdark.launcher.core.design.rememberFocusedArt(focus.engine.focused, up, backdropArt),
             fade = fade, baseScrim = 0.45f,
+        )
+        // Easter egg: a small signature in the bottom-right corner, under the key-hint bar.
+        com.swissdark.launcher.core.design.T(
+            "Made with \u2665 by Kuntal",
+            SwissType.Meta.copy(fontSize = 18.sp),
+            Modifier.align(Alignment.BottomEnd).padding(end = Swiss.MARGIN_X.dp, bottom = 12.dp),
+            Swiss.Muted.copy(alpha = 0.7f),
         )
         FocusRoot(focus, Swiss.Focus) {
             // The Frame's margins with tighter row gaps: header, clock + hero, the band, key hints.
