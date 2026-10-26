@@ -5,6 +5,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Process
+import com.swissdark.launcher.domain.ForegroundWatch
 
 /** A foreground launch of an app at a wall-clock time. */
 data class LaunchEvent(val packageName: String, val timeMillis: Long)
@@ -45,6 +46,33 @@ class UsageAdapter(private val context: Context) {
     fun lastUsed(sinceMillis: Long): Map<String, Long> {
         val out = HashMap<String, Long>()
         for (l in launches(sinceMillis, System.currentTimeMillis())) out[l.packageName] = l.timeMillis
+        return out
+    }
+
+    /**
+     * Raw foreground transitions (RESUMED in, PAUSED/STOPPED out) for [ForegroundWatch.totals].
+     * The launcher's own events are dropped. Needs the GET_USAGE_STATS appop (setup.sh).
+     */
+    fun foregroundTransitions(fromMillis: Long, toMillis: Long): List<ForegroundWatch.Event> {
+        if (!hasAccess()) return emptyList()
+        val events = try {
+            usm.queryEvents(fromMillis, toMillis)
+        } catch (_: SecurityException) {
+            return emptyList()
+        }
+        val out = ArrayList<ForegroundWatch.Event>()
+        val e = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            val kind = when (e.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED -> ForegroundWatch.RESUMED
+                UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.ACTIVITY_STOPPED -> ForegroundWatch.PAUSED
+                else -> continue
+            }
+            val pkg = e.packageName
+            if (pkg == context.packageName) continue
+            out.add(ForegroundWatch.Event(pkg, kind, e.timeStamp))
+        }
         return out
     }
 }

@@ -18,4 +18,5 @@ dependencies {
     api(libs.immutable)
     api(libs.coroutines.android)
     api(libs.serialization.protobuf)
+    testImplementation(libs.junit)
 }

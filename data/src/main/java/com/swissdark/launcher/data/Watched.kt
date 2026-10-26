@@ -18,6 +18,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.swissdark.launcher.domain.ForegroundWatch
 import com.swissdark.launcher.domain.MediaType
 import com.swissdark.launcher.domain.SearchHit
 import com.swissdark.launcher.domain.TitleRef
@@ -225,6 +226,9 @@ class WatchedStore(
     }
 
     fun delete(key: String) {
+        // An app-only card the user removed stays away until the app is used again afterwards
+        // (see [noteForeground]); remember when it went.
+        if (key.endsWith(APP_GROUP)) markRemoved(key.substringBefore('|'))
         known.remove(key)
         scope.launch(writer) { db.dao().delete(key) }
     }
@@ -490,6 +494,58 @@ class WatchedStore(
         return label.isNotEmpty() && n == norm(label)
     }
 
+    // ---- UsageStats fallback: apps that publish no media session at all (JioHotstar) ----
+
+    private val removedPrefs by lazy { context.getSharedPreferences("watched_removed", Context.MODE_PRIVATE) }
+    private fun removedAt(pkg: String): Long = removedPrefs.getLong(pkg, 0L)
+    private fun markRemoved(pkg: String) { removedPrefs.edit().putLong(pkg, System.currentTimeMillis()).apply() }
+
+    /**
+     * [candidates]: foreground use per (resolved) package since the last Continue watching
+     * clear, polled by HomeRepositoryImpl from UsageStats. An app that never publishes a
+     * session (JioHotstar) never reaches [onUntitled], so [FOREGROUND_WATCH_MS] of foreground
+     * counts as watching it: the app-only row like the gate's, "Watched X ago". A row's real
+     * playback numbers are never overwritten (only its recency moves), a row removed by the
+     * user stays away until foreground time after the removal, and nothing is written while
+     * the screen is off.
+     */
+    fun noteForeground(candidates: Map<String, ForegroundWatch.Use>) {
+        if (!recording || candidates.isEmpty()) return
+        for ((pkg, use) in candidates) {
+            if (use.totalMs < FOREGROUND_WATCH_MS) continue
+            val removed = removedAt(pkg)
+            if (removed > 0 && use.lastEnd <= removed) continue
+            scope.launch(writer) {
+                try {
+                    if (!launchable(pkg)) return@launch
+                    // Re-checked on the writer: a removal that landed after the poll must win
+                    // over the write, or the card would come back and no later poll removes it.
+                    val removedNow = removedAt(pkg)
+                    if (removedNow > 0 && use.lastEnd <= removedNow) return@launch
+                    val dao = db.dao()
+                    val key = "$pkg|$APP_GROUP"
+                    val old = dao.get(key)
+                    if (old != null) {
+                        if (use.lastEnd <= old.updatedAt) return@launch
+                        val next = old.copy(updatedAt = use.lastEnd)
+                        dao.put(next); known[key] = next
+                    } else {
+                        val row = WatchedRow(
+                            key = key, pkg = pkg, show = appLabel(pkg), episodeTitle = null,
+                            season = null, episode = null, series = false,
+                            positionMs = 0, durationMs = 0, art = null, mediaId = null,
+                            updatedAt = use.lastEnd, tmdbTried = true,
+                        )
+                        dao.put(row); known[key] = row; dao.trim(KEEP)
+                    }
+                    onChanged()
+                } catch (e: Exception) {
+                    Log.w(MediaSessionWatcher.TAG, "foreground note failed", e)
+                }
+            }
+        }
+    }
+
     // ---- opening ----
 
     /**
@@ -552,6 +608,8 @@ class WatchedStore(
         /** Row key suffix ("<package>|@app") of an app that played without a title. */
         const val APP_GROUP = "@app"
         private const val KEEP = 60
+        /** Foreground time (UsageStats fallback) that counts as watching an app with no session. */
+        const val FOREGROUND_WATCH_MS = 3 * 60_000L
         private const val MIN_WATCHED_MS = 15_000L
         private const val MIN_DURATION_MS = 90_000L
         private val YT_ID = Regex("[A-Za-z0-9_-]{11}")

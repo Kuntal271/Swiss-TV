@@ -8,6 +8,7 @@ import com.swissdark.launcher.domain.AppId
 import com.swissdark.launcher.domain.AppsRepository
 import com.swissdark.launcher.domain.ContinueItem
 import com.swissdark.launcher.domain.ContinueSource
+import com.swissdark.launcher.domain.ForegroundWatch
 import com.swissdark.launcher.domain.HeroInfo
 import com.swissdark.launcher.domain.HomeRepository
 import com.swissdark.launcher.domain.HomeSnapshot
@@ -161,6 +162,7 @@ class HomeRepositoryImpl(
     private val _snapshot = MutableStateFlow(store.read() ?: HomeSnapshot.EMPTY.copy(slot = TimeSlot.at(LocalTime.now())))
     override val snapshot: StateFlow<HomeSnapshot> = _snapshot
     private var lastRanking = 0L
+    private var lastForegroundPoll = 0L
 
     @Volatile var watchNextStatus: String = "not checked"
         private set
@@ -189,6 +191,7 @@ class HomeRepositoryImpl(
                 reason == RefreshReason.SETTINGS_CHANGED -> apps.reload(rescan = false)
             }
             ingestUsage(force = reason == RefreshReason.COLD_START)
+            pollForegroundUsage()
             val next = build()
             val cur = _snapshot.value
             if (next.copy(version = cur.version) != cur) {
@@ -266,6 +269,33 @@ class HomeRepositoryImpl(
         habits.save()
     }
 
+    /**
+     * The UsageStats fallback for apps that publish no media session (JioHotstar): Home counts
+     * their foreground time since the last clear and, past three minutes, they get their
+     * app-only "Watched X ago" card. Polled at most once a minute — [ingestUsage]'s 10-minute
+     * cadence would not notice a session that just ended. YouTube and Crunchyroll are left
+     * out: they publish real titled sessions. Alias packages (the old JioCinema stub) are
+     * folded into their service's installed package first.
+     */
+    private fun pollForegroundUsage() {
+        val w = watched ?: return
+        if (!usage.hasAccess()) return
+        val now = System.currentTimeMillis()
+        if (now - lastForegroundPoll < FOREGROUND_POLL_MS) return
+        lastForegroundPoll = now
+        val since = maxOf(settings.settings.value.continueClearedAt, now - FOREGROUND_LOOKBACK_MS)
+        val candidates = HashMap<String, ForegroundWatch.Use>()
+        for (u in ForegroundWatch.totals(usage.foregroundTransitions(since, now), since, now).values) {
+            val rp = Providers.resolve(u.pkg)
+            if (rp == WatchedStore.YOUTUBE || rp == WatchedStore.CRUNCHYROLL) continue
+            if (Providers.byPackage(rp) == null) continue
+            val acc = candidates[rp]
+            candidates[rp] = if (acc == null) u.copy(pkg = rp)
+                else ForegroundWatch.Use(rp, acc.totalMs + u.totalMs, maxOf(acc.lastEnd, u.lastEnd))
+        }
+        if (candidates.isNotEmpty()) w.noteForeground(candidates)
+    }
+
     private suspend fun build(): HomeSnapshot {
         val now = System.currentTimeMillis()
         val time = LocalTime.now()
@@ -294,10 +324,22 @@ class HomeRepositoryImpl(
                 // newest first. Never bare apps: an app without a title is not something to continue.
                 val cands = ArrayList<Pair<Long, ContinueItem>>()
                 val history = dao.history(10)
-                for (w in watched?.recent(20).orEmpty()) {
+                val rows = watched?.recent(20).orEmpty()
+                val watchedItems = ArrayList<Pair<Long, ContinueItem>>(rows.size)
+                for (w in rows) {
                     if (w.finished) continue
                     val item = fromWatched(w, byPkg, now, history) ?: continue
-                    if (item.key !in removed) cands += w.updatedAt to item
+                    if (item.key !in removed) watchedItems += w.updatedAt to item
+                }
+                // One card per service: its titled card wins over the app's own ("Panchayat ·
+                // JioHotstar" beats "JioHotstar · Watched 10 min ago") when both exist.
+                val titled = HashSet<String>()
+                for ((_, i) in watchedItems) {
+                    if (i.source == ContinueSource.WATCHED && !i.key.endsWith(WatchedStore.APP_GROUP)) titled += i.service.packageName
+                }
+                for ((at, item) in watchedItems) {
+                    if (item.key.endsWith(WatchedStore.APP_GROUP) && item.service.packageName in titled) continue
+                    cands += at to item
                 }
                 // Opening a title from Search is not watching it: only "Save for later" makes a card
                 // here. Opened titles name an app's later untitled playback instead (fromAppPlayback).
@@ -441,6 +483,9 @@ class HomeRepositoryImpl(
     companion object {
         /** How long a removed card can be brought back. */
         const val UNDO_MS = 5_500L
+        /** Foreground-time fallback: poll cadence, and how far back foreground time counts. */
+        private const val FOREGROUND_POLL_MS = 60_000L
+        private const val FOREGROUND_LOOKBACK_MS = 24L * 3_600_000L
         /** An untitled playback this soon after a title was opened in the same app is that title. */
         private const val OPENED_WINDOW_MS = 4 * 60 * 60_000L
 

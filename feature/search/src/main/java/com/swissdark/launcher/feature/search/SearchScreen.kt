@@ -549,7 +549,7 @@ fun SearchScreen(
                     1 -> Footer("No ads, no services you don’t use", listOf(KeyHint("Mic", "Search by voice"), KeyHint("Back", "Clear")))
                     else -> Footer(
                         credit,
-                        listOf(KeyHint("OK", "Open"), KeyHint("Back", "Clear")),
+                        listOf(KeyHint("Left / Right", "Filters"), KeyHint("OK", "Open"), KeyHint("Back", "Clear")),
                     )
                 }
             }
