@@ -249,7 +249,7 @@ private class SectionNav {
 
 /** Focus items in section [s] (must match the counts the section builders below report). */
 private fun contentCount(s: Int, catalog: List<Wallpaper>, apps: List<AppEntry>): Int = when (s) {
-    0 -> 1
+    0 -> 2
     1 -> 4 + minOf(catalog.size, 11) + 1 + 2
     2 -> serviceKeys.size + 2
     3 -> apps.size + 2
@@ -285,15 +285,21 @@ private fun onOff(b: Boolean) = if (b) "On" else "Off"
 // ---------- sections ----------
 
 private fun homeSection(s: LauncherSettings, a: SettingsActions) = SectionContent(
-    count = 1,
+    count = 2,
     click = { i ->
         when (i) {
             0 -> a.update { it.copy(showUpNext = !it.showUpNext) }
+            // Comfort text size: 100% → 115% → 130% → 100%. Every text on every screen follows.
+            1 -> a.update {
+                val next = when { it.textScale < 1.05f -> 1.15f; it.textScale < 1.2f -> 1.3f; else -> 1f }
+                it.copy(textScale = next)
+            }
         }
     },
 ) { f, base ->
     Column {
         ValueRow(f, base, "Show Continue watching", onOff(s.showUpNext))
+        ValueRow(f, base + 1, "Text size", "${(s.textScale * 100).roundToInt()}% · OK changes")
         InfoRow("Apps on Home", "6, by habit · pinned first")
         InfoRow("Clock", "24-hour", last = true)
     }

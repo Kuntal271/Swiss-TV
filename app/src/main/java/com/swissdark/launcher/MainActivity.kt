@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.ComposeView
 import com.swissdark.launcher.feature.search.SearchInput
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import com.swissdark.launcher.core.design.DesignCanvas
 import com.swissdark.launcher.core.design.LocalAppArt
@@ -48,7 +50,8 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) { pop() }
         val compose = ComposeView(this).apply {
             setContent {
-                DesignCanvas {
+                val textScale by graph.settings.settings.collectAsState()
+                DesignCanvas(typeScale = textScale.textScale) {
                     CompositionLocalProvider(LocalAppArt provides graph.art, com.swissdark.launcher.core.design.LocalAppGlyph provides com.swissdark.launcher.data.AppGlyphs::of) {
                         AppRoot(graph, routes, this@MainActivity)
                     }

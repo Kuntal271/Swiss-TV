@@ -18,4 +18,5 @@ dependencies {
     api(project(":core:focus"))
     api(project(":domain"))
     implementation(libs.coil.compose)
+    testImplementation(libs.junit)
 }

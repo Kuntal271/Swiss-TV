@@ -7,9 +7,11 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
 
 /**
@@ -56,6 +58,22 @@ private fun display(size: Int, weight: Int, lineHeight: Float = 1.2f, tracking: 
 
 private fun text(size: Int, weight: Int, lineHeight: Float = 1.2f, tracking: TextUnit = 0.sp) =
     style(InterText, size, weight, lineHeight, tracking)
+
+/**
+ * Comfort text size (Settings › Home › Text size): reading text grows by [LocalTypeScale],
+ * layout, tiles and art keep their geometry. Display sizes of 100 sp and up (the clock, the
+ * big display type) are exempt — they are not reading text and would overflow their columns.
+ */
+val LocalTypeScale = staticCompositionLocalOf { 1f }
+
+/** [this] with its font size (and line height) grown by [scale]; unchanged at 1 or ≥ 100 sp. */
+fun TextStyle.atTypeScale(scale: Float): TextStyle = when {
+    scale == 1f || fontSize.value >= 100f || fontSize.isUnspecified -> this
+    else -> copy(
+        fontSize = (fontSize.value * scale).sp,
+        lineHeight = if (lineHeight.isUnspecified) lineHeight else (lineHeight.value * scale).sp,
+    )
+}
 
 /** Inter. Nothing is smaller than 24 px: Label, Meta and the small print all read at 3 m. */
 object SwissType {

@@ -197,6 +197,8 @@ data class LauncherSettings(
     val clearContinueOnOff: Boolean = true,            // empty Continue watching when the TV goes to standby / boots
     val continueClearedAt: Long = 0L,                  // last clear: Watch Next rows engaged before it stay hidden
     val iconPack: String = "",                         // icon pack package; "" = the apps' own logos
+    val textScale: Float = 1f,                          // Comfort text size: 1f, 1.15f or 1.3f (Settings › Home)
+    val weatherCity: String = "mumbai",                 // Weather on Home: key into Cities
 )
 
 /** TCL utilities that clutter the app list. Hidden, not disabled; unhide in Launcher settings › Apps. */

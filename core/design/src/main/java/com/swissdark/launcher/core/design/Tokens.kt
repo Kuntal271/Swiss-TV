@@ -43,7 +43,7 @@ object Swiss {
  * this is a density of 1.0 and the mock-ups map pixel for pixel.
  */
 @Composable
-fun DesignCanvas(content: @Composable () -> Unit) {
+fun DesignCanvas(typeScale: Float = 1f, content: @Composable () -> Unit) {
     val cfg = LocalConfiguration.current
     val physical = LocalDensity.current
     val widthPx = cfg.screenWidthDp * physical.density
@@ -55,5 +55,5 @@ fun DesignCanvas(content: @Composable () -> Unit) {
     }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val reduce = androidx.compose.runtime.remember(ctx) { Motion.reduceMotion(ctx) }
-    CompositionLocalProvider(LocalDensity provides density, LocalReduceMotion provides reduce, content = content)
+    CompositionLocalProvider(LocalDensity provides density, LocalReduceMotion provides reduce, LocalTypeScale provides typeScale, content = content)
 }
