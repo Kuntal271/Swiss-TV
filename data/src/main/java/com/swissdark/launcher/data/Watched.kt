@@ -255,6 +255,21 @@ class WatchedStore(
         onChanged()
     }
 
+    /**
+     * The owner names the series for a row the catalogs could not resolve (the adb RENAME_SHOW
+     * hook): display and search names become the series, the replaced name is kept as the
+     * episode's, and TMDB (once it has a key) fills the id and the backdrop.
+     */
+    suspend fun renameShow(key: String, show: String) = withContext(writer) {
+        val cur = db.dao().get(key) ?: return@withContext
+        val episode = cur.show.takeIf { it != show }
+        val next = cur.copy(show = show, displayName = show, episodeTitle = episode ?: cur.episodeTitle, tmdbTried = false)
+        if (next == cur) return@withContext
+        db.dao().put(next); known[key] = next
+        if (tmdb.hasKey) matchTmdb(next)
+        onChanged()
+    }
+
     /** The stored online art was wrong (a name-collision): forget it, the row's own art returns. */
     suspend fun clearShowArt(key: String) = withContext(writer) {
         val cur = db.dao().get(key) ?: return@withContext
