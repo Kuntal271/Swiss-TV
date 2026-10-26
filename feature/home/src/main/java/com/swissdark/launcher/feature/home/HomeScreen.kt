@@ -82,6 +82,9 @@ class HomeActions(
     val launcherSettings: () -> Unit = quickSettings,
     /** The card's title page (Resume / Remove / next episodes): the hold-OK menu's "Details". */
     val details: (ContinueItem) -> Unit = {},
+    /** Header chips: the launcher restarts itself; power off needs the device admin (setup.sh). */
+    val restart: () -> Unit = {},
+    val powerOff: () -> Unit = {},
 )
 
 @Immutable
@@ -96,7 +99,10 @@ class HomeStatus(
 )
 
 /** Top navigation: glyph + label. Index order = focus order after the content. */
-private val links = listOf("search" to "Search", "grid" to "All apps", "monitor" to "Inputs", "adjustments" to "Settings")
+private val links = listOf(
+    "search" to "Search", "grid" to "All apps", "monitor" to "Inputs", "adjustments" to "Settings",
+    "restart" to "Restart", "power" to "Power off",
+)
 
 /** Two rows of three, by habit. */
 private const val APP_COLS = 3
@@ -139,9 +145,12 @@ fun HomeScreen(
     val count = navBase + links.size
     // Hold OK on a card: Resume · Details · Remove, in the key-hint bar's place.
     var menuFor by remember { mutableStateOf<ContinueItem?>(null) }
-    val focus = rememberFocusScreen(count, initial = 0, active = active && menuFor == null)
+    // Restart and Power off confirm before they act (initial focus on Cancel).
+    var confirm by remember { mutableStateOf<ConfirmKind?>(null) }
+    val focus = rememberFocusScreen(count, initial = 0, active = active && menuFor == null && confirm == null)
     val now by rememberMinute()
     if (!active && menuFor != null) menuFor = null
+    if (!active && confirm != null) confirm = null
 
     focus.onClick = { i ->
         when {
@@ -151,7 +160,9 @@ fun HomeScreen(
                 0 -> actions.search()
                 1 -> actions.allApps()
                 2 -> actions.inputs()
-                else -> actions.quickSettings()
+                3 -> actions.quickSettings()
+                4 -> confirm = ConfirmKind.Restart
+                else -> confirm = ConfirmKind.Power
             }
         }
     }
@@ -310,8 +321,17 @@ fun HomeScreen(
                             // Cards on the grid: span(2) each, gutter gaps.
                             Row(horizontalArrangement = Arrangement.spacedBy(Swiss.GUTTER.dp)) {
                                 for ((i, item) in up.withIndex()) {
+                                    // The caption says what it is: series + S/E + episode, not
+                                    // just the episode name.
+                                    val cardMeta = when {
+                                        item.subtitle != null && item.season != null && item.episode != null ->
+                                            "S${item.season} E${item.episode} · ${item.subtitle}"
+                                        item.season != null && item.episode != null -> "S${item.season} E${item.episode}"
+                                        item.subtitle != null -> item.subtitle
+                                        else -> null
+                                    }
                                     PosterCard(
-                                        focus, i, item.artKey, 146.dp, item.name, null,
+                                        focus, i, item.artKey, 146.dp, item.name, cardMeta,
                                         Modifier.weight(1f), progress = item.progress,
                                     )
                                 }
@@ -334,6 +354,8 @@ fun HomeScreen(
                     HintBar(focus, status.hint.isNotEmpty(), up, apps)
                     val m = menuFor
                     if (m != null) CardMenu(m, actions, active, Modifier.matchParentSize()) { menuFor = null }
+                    val c = confirm
+                    if (c != null) Confirm(c, actions, active, Modifier.matchParentSize()) { confirm = null }
                 }
             }
         }
@@ -540,6 +562,45 @@ private fun CardMenu(item: ContinueItem, actions: HomeActions, active: Boolean, 
             Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 1, "Details", false, SwissType.Row28, Swiss.Ink, marker = false) }
             Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 2, "Remove", false, SwissType.Row28, Swiss.Ink, marker = false) }
             Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false) }
+        }
+    }
+}
+
+private enum class ConfirmKind { Restart, Power }
+
+/**
+ * Restart and Power off sit right next to the nav, so both confirm before they act — and the
+ * initial focus is on Cancel, so an accidental double-OK does nothing. Power off without the
+ * device admin (setup.sh) tells the app it needs setup instead of sleeping the screen.
+ */
+@Composable
+private fun Confirm(kind: ConfirmKind, actions: HomeActions, active: Boolean, modifier: Modifier, close: () -> Unit) {
+    val menu = rememberFocusScreen(2, active = active)
+    menu.onClick = { i ->
+        close()
+        when {
+            i == 1 && kind == ConfirmKind.Restart -> actions.restart()
+            i == 1 -> actions.powerOff()
+        }
+    }
+    menu.onOtherKey = { e ->
+        if (e.keyCode == KeyEvent.KEYCODE_BACK || e.keyCode == KeyEvent.KEYCODE_MENU) {
+            if (e.action == KeyEvent.ACTION_UP) close()
+            true
+        } else false
+    }
+    val pop = com.swissdark.launcher.core.design.rememberAppear(kind.name, Motion.SHORT)
+    FocusRoot(menu, Swiss.Focus, modifier) {
+        Row(
+            Modifier.fillMaxSize().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(start = 24.dp, end = 12.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
+        ) {
+            Label(if (kind == ConfirmKind.Power) "Power off the TV?" else "Restart Swiss Home?", Modifier.weight(1f), color = Swiss.Ink)
+            Box(Modifier.wrapContentHeight(unbounded = true)) { TabText(menu, 0, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false) }
+            Box(Modifier.wrapContentHeight(unbounded = true)) {
+                TabText(menu, 1, if (kind == ConfirmKind.Power) "Power off" else "Restart", false, SwissType.Row28, Swiss.Ink, marker = false)
+            }
         }
     }
 }

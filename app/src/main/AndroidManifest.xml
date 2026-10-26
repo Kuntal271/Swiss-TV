@@ -126,6 +126,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Power off from the D-pad: setup.sh activates this admin ("force lock" only). -->
+        <receiver
+            android:name=".PowerAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/power_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
         <!-- setup.sh pushes the TMDB key and services over ADB. DUMP is held by the shell, not by apps. -->
         <receiver
             android:name=".ConfigReceiver"

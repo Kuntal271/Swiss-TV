@@ -99,11 +99,16 @@ class BackdropArt(
         null
     }
 
-    suspend fun episodeArtUrl(item: ContinueItem): String? = try {
+    data class EpisodeArt(val url: String, val showName: String)
+
+    /** The episode's own still plus the SHOW it belongs to (the row is renamed with it). */
+    suspend fun episodeResolve(item: ContinueItem): EpisodeArt? = try {
         resolveUrl(item)                                   // finds and remembers the show
         val id = prefs.getInt("s:" + item.key, -1).takeIf { it > 0 }
         val show = id?.let { sources.tvmaze.show(it) }
-        BackdropMatch.episodeImage(show, item.name, item.season, item.episode)
+        BackdropMatch.episodeImage(show, item.name, item.season, item.episode)?.let { url ->
+            EpisodeArt(url, show?.str("name").orEmpty())
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -119,19 +124,23 @@ class BackdropArt(
         null
     }
 
+    data class CardArt(val url: String, val showName: String? = null)
+
     /**
      * The whole card-art chain in one call. Episode-named rows ("S2 E14 Bixby's Back" → the
-     * episode's TVmaze still) first; then the stripped name as a possible SHOW name (JioHotstar
-     * titles episodes "S1 E1 <Show>"); then IMDb's exact-match poster, series-only for episodes
-     * (an episode name that equals some film's title is a wrong poster, not art).
+     * episode's TVmaze still plus the show's name) first; then the stripped name as a possible
+     * SHOW name (JioHotstar titles episodes "S1 E1 <Show>"); then IMDb's exact-match poster,
+     * series-only for episodes (an episode name that equals some film's title is a wrong
+     * poster, not art).
      */
-    suspend fun cardArtUrl(item: ContinueItem, episodeStyle: Boolean): String? {
+    suspend fun cardArt(item: ContinueItem, episodeStyle: Boolean): CardArt? {
         if (episodeStyle) {
-            episodeArtUrl(item)?.let { return it }
-            showArtUrl(item)?.let { return it }
-            return imdbArtUrl(item, seriesOnly = true)
+            episodeResolve(item)?.let { return CardArt(it.url, it.showName) }
+            showArtUrl(item)?.let { return CardArt(it) }
+            imdbArtUrl(item, seriesOnly = true)?.let { return CardArt(it) }
+            return null
         }
-        return showArtUrl(item) ?: imdbArtUrl(item)
+        return showArtUrl(item)?.let { CardArt(it) } ?: imdbArtUrl(item)?.let { CardArt(it) }
     }
 
     private fun dimLevel(): Float = maxOf(dim(), MIN_DIM)

@@ -216,6 +216,23 @@ class WatchedStore(
         onChanged()
     }
 
+    /**
+     * The show behind an episode-named row was resolved (web search + TVmaze confirmation):
+     * rename the row to the series, remember the episode name, and take the episode's still
+     * as the art. The card then reads "VisionQuest · S1 E1 · No Strings".
+     */
+    suspend fun setShowIdentity(key: String, show: String, episodeTitle: String?, artUrl: String?) = withContext(writer) {
+        val cur = db.dao().get(key) ?: return@withContext
+        val next = cur.copy(
+            show = show.ifBlank { cur.show },
+            episodeTitle = episodeTitle ?: cur.episodeTitle,
+            tmdbArt = artUrl ?: cur.tmdbArt,
+        )
+        if (next == cur) return@withContext
+        db.dao().put(next); known[key] = next
+        onChanged()
+    }
+
     /** Test hook (DEBUG_SEED): three demo cards, or remove them again. Demo keys start with "demo". */
     suspend fun seedDemo(remove: Boolean) = withContext(writer) {
         val now = System.currentTimeMillis()

@@ -18,6 +18,8 @@ object Glyphs {
         "netflix" to arrayOf("M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -12", "M8 4l0 16", "M16 4l0 16", "M4 8l4 0", "M4 16l4 0", "M4 12l16 0", "M16 8l4 0", "M16 16l4 0"),
         "youtube" to arrayOf("M7 4v16l13 -8l-13 -8"),
         "play" to arrayOf("M7 6v12l12 -6z"),
+        "restart" to arrayOf("M4.05 11a8 8 0 1 1 .5 4", "M4.05 20v-5h5"),
+        "power" to arrayOf("M12 2v10", "M18.36 6.64a9 9 0 1 1 -12.73 0"),
         "prime" to arrayOf("M3 9a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -9", "M16 3l-4 4l-4 -4"),
         "jiohotstar" to arrayOf("M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873l-6.158 -3.245"),
         "spotify" to arrayOf("M3 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0", "M13 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0", "M9 17v-13h10v13", "M9 8h10"),

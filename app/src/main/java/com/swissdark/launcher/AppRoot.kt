@@ -240,6 +240,13 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                             message = "Removed “${it.name}” · OK to undo"
                         },
                         details = { details(it) },
+                        restart = { android.os.Process.killProcess(android.os.Process.myPid()) },
+                        powerOff = {
+                            if (!g.power.lockNow()) {
+                                messageMs = 5_000L
+                                message = "Power off needs its device admin — run setup.sh once"
+                            }
+                        },
                         launchApp = { if (!undone()) report(g.launcher.launch(it.id), it.label) },
                         pinApp = { g.apps.setPinned(it.id, !it.pinned); g.refresh(RefreshReason.SETTINGS_CHANGED) },
                         allApps = { if (!undone()) activity.push(Route.AllApps) },

@@ -11,6 +11,7 @@ import com.swissdark.launcher.platform.tv.InputsAdapter
 import com.swissdark.launcher.platform.tv.LaunchAdapter
 import com.swissdark.launcher.platform.tv.NetworkAdapter
 import com.swissdark.launcher.platform.tv.PackagesAdapter
+import com.swissdark.launcher.platform.tv.PowerAdmin
 import com.swissdark.launcher.platform.tv.TclSettingsAdapter
 import com.swissdark.launcher.platform.tv.UsageAdapter
 import com.swissdark.launcher.platform.tv.VoiceAdapter
@@ -35,6 +36,8 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     val packages by lazy { PackagesAdapter(context) }
     val launchAdapter by lazy { LaunchAdapter(context, packages) }
     val usage by lazy { UsageAdapter(context) }
+    /** Power off from the D-pad (device admin, activated by setup.sh). */
+    val power by lazy { PowerAdmin(context) }
     val watchNext by lazy { WatchNextAdapter(context) }
     /** Weather for Home's clock line (open-meteo, no key). Silent when offline. */
     val weather by lazy {
@@ -198,8 +201,15 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                     if (!episodeStyle && !item.artKey.startsWith("banner:")) continue
                     if (!tried.add(item.key + "|" + item.name)) continue
                     launch {
-                        val url = backdropArt.cardArtUrl(item, episodeStyle) ?: return@launch
-                        watched.setShowArt(item.key.removePrefix("w:"), url)
+                        val art = backdropArt.cardArt(item, episodeStyle) ?: return@launch
+                        val key = item.key.removePrefix("w:")
+                        // A resolved show ("VisionQuest" behind "No Strings") renames the row, so
+                        // the card and the hero read the series with its episode, not just the name.
+                        if (!art.showName.isNullOrBlank() && !art.showName.equals(item.name, ignoreCase = true)) {
+                            watched.setShowIdentity(key, art.showName, item.name, art.url)
+                        } else {
+                            watched.setShowArt(key, art.url)
+                        }
                     }
                 }
             }

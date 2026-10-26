@@ -41,6 +41,7 @@ if [[ "${UNDO:-}" == "1" ]]; then
   A cmd role remove-role-holder --user 0 android.app.role.HOME "$PKG" >/dev/null 2>&1 || true
   A cmd package set-home-activity com.google.android.apps.tv.launcherx/.home.HomeActivity || true
   for p in $BLOAT; do A pm enable "$p" >/dev/null 2>&1 && ok "re-enabled $p" || true; done
+  A dpm remove-active-admin "$PKG/.PowerAdmin" >/dev/null 2>&1 || true
   A settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
   ok "Done. Uninstall with: adb -s $S uninstall $PKG"
   exit 0
@@ -64,6 +65,8 @@ A pm grant "$PKG" android.permission.ACCESS_FINE_LOCATION 2>/dev/null && ok "loc
 if A pm grant "$PKG" com.android.providers.tv.permission.READ_EPG_DATA 2>/dev/null; then ok "Watch Next read permission"; else warn "Watch Next permission is system-only here: Up next uses the launcher's own history"; fi
 # Up next: a notification listener may read media sessions (what is playing, how far in). It reads no notifications.
 if A cmd notification allow_listener "$PKG/$PKG.MediaListenerService" 2>&1 | grep -qiE "error|exception|not allowed"; then warn "media-session access refused: Up next only shows titles opened from Search"; else ok "media sessions (Up next: what you watched)"; fi
+# Power off from the D-pad: a device admin may lock the screen (standby = the remote's power key).
+if A dpm set-active-admin "$PKG/.PowerAdmin" >/dev/null 2>&1; then ok "device admin (the Power off chip locks the screen)"; else warn "device admin refused: the Power off chip will ask for setup"; fi
 
 say "First start (creates the app's folders)"
 A am start -W -n "$HOME_ACT" >/dev/null
