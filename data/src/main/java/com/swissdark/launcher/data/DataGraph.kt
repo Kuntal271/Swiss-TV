@@ -2,6 +2,7 @@ package com.swissdark.launcher.data
 
 import android.content.Context
 import android.provider.Settings
+import com.swissdark.launcher.domain.Cities
 import com.swissdark.launcher.domain.DeviceStatus
 import com.swissdark.launcher.domain.RefreshReason
 import com.swissdark.launcher.platform.tv.BannerArt
@@ -35,6 +36,12 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     val launchAdapter by lazy { LaunchAdapter(context, packages) }
     val usage by lazy { UsageAdapter(context) }
     val watchNext by lazy { WatchNextAdapter(context) }
+    /** Weather for Home's clock line (open-meteo, no key). Silent when offline. */
+    val weather by lazy {
+        WeatherStore(scope, http, java.io.File(context.filesDir, "weather.json")) {
+            Cities.byKey(settings.settings.value.weatherCity) ?: Cities.all.first()
+        }
+    }
     val homeRole by lazy { HomeRoleAdapter(context) }
     val network by lazy { NetworkAdapter(context) }
     val voice by lazy { VoiceAdapter(context) }
@@ -220,16 +227,20 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
         watched.start()      // media sessions → Up next; a no-op until setup.sh enables the listener
         watchCardArt()
         wallpapers.start()
+        weather.start()
         refresh(RefreshReason.COLD_START)
         search.rebuildIndex()
         status.checkHome()
         DailyRefreshWorker.schedule(context)
-        // Keep the wallpaper in step with its settings (choice and dim per slot).
+        // Keep the wallpaper in step with its settings (choice and dim per slot),
+        // and fetch the new city's weather the moment the owner picks it.
         scope.launch {
             var last = settings.settings.value.let { it.wallpaperBySlot to it.dimBySlot }
+            var lastCity = settings.settings.value.weatherCity
             settings.settings.collect { s ->
                 val now = s.wallpaperBySlot to s.dimBySlot
                 if (now != last) { last = now; wallpapers.refresh() }
+                if (s.weatherCity != lastCity) { lastCity = s.weatherCity; weather.refreshNow() }
             }
         }
     }

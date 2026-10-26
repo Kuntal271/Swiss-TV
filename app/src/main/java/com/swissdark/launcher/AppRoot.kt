@@ -94,6 +94,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
     val settings by g.settings.settings.collectAsState()
     val network by g.status.network.collectAsState()
     val isHome by g.status.isHomeApp.collectAsState()
+    val weatherNow by g.weather.now.collectAsState()
     val top = routes.last()
     var message by remember { mutableStateOf<String?>(null) }
     // How long the message stays (ms); the undo prompt for a removed card stays 5 s.
@@ -186,7 +187,11 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = if (top == Route.Home || !nav.covered.value) nav.homeA.value else 0f }) {
             HomeScreen(
                 snapshot, wallpaper,
-                HomeStatus(device, network, isHome, settings.lastInput ?: "Home", if (top == Route.Home) "Hold OK to remove a card or pin an app" else ""),
+                HomeStatus(
+                    device, network, isHome, settings.lastInput ?: "Home",
+                    if (top == Route.Home) "Hold OK to remove a card or pin an app" else "",
+                    weatherNow?.let { "${it.tempC}° ${it.text}" } ?: "",
+                ),
                 remember {
                     // OK during the undo window after a removal brings the card back instead.
                     fun undone(): Boolean {

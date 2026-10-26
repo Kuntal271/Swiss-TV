@@ -85,7 +85,15 @@ class HomeActions(
 )
 
 @Immutable
-class HomeStatus(val deviceName: String, val network: String, val isHome: Boolean, val input: String, val hint: String)
+class HomeStatus(
+    val deviceName: String,
+    val network: String,
+    val isHome: Boolean,
+    val input: String,
+    val hint: String,
+    /** "27° Partly cloudy" from open-meteo; empty when there is none. */
+    val weather: String = "",
+)
 
 /** Top navigation: glyph + label. Index order = focus order after the content. */
 private val links = listOf("search" to "Search", "grid" to "All apps", "monitor" to "Inputs", "adjustments" to "Settings")
@@ -258,6 +266,9 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                             CrossfadeText(now.format(Fmt.clock), SwissType.Clock, Modifier.alignByBaseline())
                             Label(now.format(Fmt.longDate), Modifier.alignByBaseline())
+                            if (status.weather.isNotEmpty()) {
+                                T("·  " + status.weather, SwissType.Meta, Modifier.alignByBaseline(), Swiss.Muted, maxLines = 1)
+                            }
                         }
                         Hero(focus.engine.focused, up, apps, status, now)
                     }

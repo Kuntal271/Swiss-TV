@@ -72,6 +72,7 @@ import com.swissdark.launcher.core.focus.focusScroll
 import com.swissdark.launcher.core.focus.focusViewport
 import com.swissdark.launcher.core.focus.rememberFocusScreen
 import com.swissdark.launcher.domain.AppEntry
+import com.swissdark.launcher.domain.Cities
 import com.swissdark.launcher.domain.LauncherSettings
 import com.swissdark.launcher.domain.PreparedWallpaper
 import com.swissdark.launcher.domain.Providers
@@ -249,7 +250,7 @@ private class SectionNav {
 
 /** Focus items in section [s] (must match the counts the section builders below report). */
 private fun contentCount(s: Int, catalog: List<Wallpaper>, apps: List<AppEntry>): Int = when (s) {
-    0 -> 2
+    0 -> 3
     1 -> 4 + minOf(catalog.size, 11) + 1 + 2
     2 -> serviceKeys.size + 2
     3 -> apps.size + 2
@@ -294,12 +295,14 @@ private fun homeSection(s: LauncherSettings, a: SettingsActions) = SectionConten
                 val next = when { it.textScale < 1.05f -> 1.15f; it.textScale < 1.2f -> 1.3f; else -> 1f }
                 it.copy(textScale = next)
             }
+            2 -> a.update { it.copy(weatherCity = Cities.next(it.weatherCity).key) }
         }
     },
 ) { f, base ->
     Column {
         ValueRow(f, base, "Show Continue watching", onOff(s.showUpNext))
         ValueRow(f, base + 1, "Text size", "${(s.textScale * 100).roundToInt()}% · OK changes")
+        ValueRow(f, base + 2, "Weather city", (Cities.byKey(s.weatherCity) ?: Cities.all.first()).name + " · OK changes")
         InfoRow("Apps on Home", "6, by habit · pinned first")
         InfoRow("Clock", "24-hour", last = true)
     }
