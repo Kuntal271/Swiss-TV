@@ -75,7 +75,10 @@ fun AllAppsScreen(
     var moving by remember { mutableStateOf<AppEntry?>(null) }
     // Where the app being moved started, so Back can put it back.
     val moveFrom = remember { intArrayOf(-1) }
-    val grid = rememberFocusScreen(apps.size, active = active && menuFor == null && moving == null)
+    // Letter jump: UP at the very top row opens the letter bar (see [jump] below).
+    var jumpOpen by remember { mutableStateOf(false) }
+    val letters = remember(apps) { apps.map { it.label.take(1).uppercase() }.distinct().sorted() }
+    val grid = rememberFocusScreen(apps.size, active = active && menuFor == null && moving == null && !jumpOpen)
     // Scroll by whole rows: no sliver of a row (cut art, bright label) at the top edge.
     grid.snapRows = true
     val now by rememberMinute()
@@ -106,6 +109,10 @@ fun AllAppsScreen(
             true
         } else false
     }
+    grid.onEdge = { i, dir ->
+        // UP from the top row goes nowhere: open the letter bar instead.
+        if (dir == DpadKey.UP && i < COLS && letters.isNotEmpty()) { jumpOpen = true; true } else false
+    }
 
     // Hold-OK menu: Pin · Hide · Move · Cancel
     val menu = rememberFocusScreen(4, active = active && menuFor != null)
@@ -121,6 +128,34 @@ fun AllAppsScreen(
     menu.onOtherKey = { e ->
         if (e.keyCode == KeyEvent.KEYCODE_BACK) {
             if (e.action == KeyEvent.ACTION_UP) menuFor = null
+            true
+        } else false
+    }
+
+    // Letter jump: LEFT/RIGHT picks the letter (wrapping at the ends), OK jumps the grid to
+    // that letter's first app, UP/DOWN and Back close it. The grid stays composed underneath
+    // and keeps its focus; the jump only calls focus(), which glides the ring and scrolls.
+    val jump = rememberFocusScreen(letters.size, active = active && jumpOpen)
+    jump.onClick = { i ->
+        jumpOpen = false
+        letters.getOrNull(i)?.let { l ->
+            apps.indexOfFirst { it.label.take(1).uppercase() == l }
+                .takeIf { it >= 0 }
+                ?.let { grid.focus(it, animate = true) }
+        }
+    }
+    jump.onEdge = { i, dir ->
+        val n = letters.size
+        when (dir) {
+            DpadKey.LEFT -> if (i == 0) { jump.focus(n - 1, animate = true); true } else false
+            DpadKey.RIGHT -> if (i == n - 1) { jump.focus(0, animate = true); true } else false
+            DpadKey.UP, DpadKey.DOWN -> { jumpOpen = false; true }
+            else -> false
+        }
+    }
+    jump.onOtherKey = { e ->
+        if (e.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (e.action == KeyEvent.ACTION_UP) jumpOpen = false
             true
         } else false
     }
@@ -204,6 +239,23 @@ fun AllAppsScreen(
                                 MenuItem { TabText(menu, 1, "Hide", false, SwissType.Row28, Swiss.Ink, marker = false) }
                                 MenuItem { TabText(menu, 2, "Move", false, SwissType.Row28, Swiss.Ink, marker = false) }
                                 MenuItem { TabText(menu, 3, "Cancel", false, SwissType.Row28, Swiss.Ink, marker = false) }
+                            }
+                        }
+                    }
+                    // Letter bar over the footer: the grid never shrinks, the ring never moves.
+                    if (jumpOpen && letters.isNotEmpty()) {
+                        val pop = rememberAppear(jumpOpen, Motion.SHORT)
+                        FocusRoot(jump, Swiss.Focus, Modifier.matchParentSize()) {
+                            Row(
+                                Modifier.fillMaxSize().drawPop({ pop.value }).topRule(4.dp, Swiss.Ink).background(Swiss.Panel).padding(start = 24.dp, end = 24.dp, top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Label("Jump to", Modifier.weight(1f), color = Swiss.Ink)
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    for ((k, l) in letters.withIndex()) {
+                                        TabText(jump, k, l, false, SwissType.Row28, Swiss.Ink, marker = false)
+                                    }
+                                }
                             }
                         }
                     }
