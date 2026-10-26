@@ -421,7 +421,7 @@ fun PosterCard(
     progress: Float? = null,
     titleStyle: TextStyle = SwissType.Card,
     metaStyle: TextStyle = SwissType.Meta,
-    gap: Dp = 12.dp,
+    gap: Dp = 16.dp,
     decodeW: Int = 480,
     decodeH: Int = 270,
     scrolling: Boolean = false,
@@ -540,15 +540,15 @@ private fun tintOf(c: Color): ColorFilter = when (c) {
  * focused = solid yellow, black icon and text, scale 1.04 (same timing as the tiles).
  */
 @Composable
-fun NavChip(state: FocusScreenState, index: Int, glyph: String, label: String, modifier: Modifier = Modifier) {
+fun NavChip(state: FocusScreenState, index: Int, glyph: String, label: String, modifier: Modifier = Modifier, iconOnly: Boolean = false) {
     val ink = rememberFocusInk(state, index)
     Row(
-        modifier.height(60.dp).focusFill(state, index, ink).padding(horizontal = 26.dp),
+        modifier.height(60.dp).focusFill(state, index, ink).padding(horizontal = if (iconOnly) 18.dp else 26.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         GlyphDraw(glyph, ink.ink, size = 34.dp)
-        TDraw(label, SwissType.Button, ink.ink, maxLines = 1)
+        if (!iconOnly) TDraw(label, SwissType.Button, ink.ink, maxLines = 1)
     }
 }
 

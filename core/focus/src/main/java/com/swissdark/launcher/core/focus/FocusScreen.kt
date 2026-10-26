@@ -178,7 +178,7 @@ class FocusScreenState internal constructor(
     var snapRows = false
     /** Scroll back to 0 whenever the focused item is visible there (keeps headings above it whole). */
     var preferTop = false
-    var ringOffset = 6f
+    var ringOffset = 0f
     var ringStroke = 4f
     var enabled = true
 

@@ -373,7 +373,7 @@ private fun HomeHeader(focus: FocusScreenState, base: Int, status: HomeStatus) {
         // Shifted right by the chip's own padding: the last label ends on the right margin and
         // its focus fill reaches 26 px into the margin.
         Row(Modifier.offset(x = 26.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((k, l) in links.withIndex()) NavChip(focus, base + k, l.first, l.second)
+            for ((k, l) in links.withIndex()) NavChip(focus, base + k, l.first, l.second, iconOnly = k >= 4)
         }
     }
 }

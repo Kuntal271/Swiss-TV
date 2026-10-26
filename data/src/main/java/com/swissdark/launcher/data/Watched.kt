@@ -187,6 +187,7 @@ class WatchedStore(
     /** Main thread. Idempotent; false until setup.sh has enabled the notification listener. */
     fun start(): Boolean {
         started = true
+        migrateLegacyTitles()
         if (watcher.start()) return true
         // Enabled but not bound (an app update unbinds it until the next boot): ask for a rebind;
         // MediaListenerService.onListenerConnected calls start() again.
@@ -198,6 +199,30 @@ class WatchedStore(
 
     fun stop() {
         if (started) watcher.stop()
+    }
+
+    /**
+     * Rows written before the episode-name strip carry the whole session title ("S1 E1 No
+     * Strings") as the show. Rewrite them as episode rows ("No Strings" + S/E) so the series
+     * lookup can resolve them (e.g. VisionQuest) and the card reads the series. Idempotent.
+     */
+    private fun migrateLegacyTitles() {
+        scope.launch(writer) {
+            runCatching {
+                for (row in db.dao().recent(60)) {
+                    if (row.episodeTitle != null || row.season == null || row.episode == null) continue
+                    val (s, e, name) = episodeName(row.show) ?: continue
+                    val newKey = row.pkg + "|latest"
+                    val existing = db.dao().get(newKey)
+                    db.dao().delete(row.key); known.remove(row.key)
+                    if (existing == null) {
+                        val next = row.copy(key = newKey, show = name, season = s, episode = e)
+                        db.dao().put(next); known[newKey] = next
+                    }
+                }
+                onChanged()
+            }
+        }
     }
 
     /** Rows Home last showed (or that were just written): [open] runs on the main thread, no DB. */
