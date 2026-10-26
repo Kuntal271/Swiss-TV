@@ -99,15 +99,17 @@ class BackdropArt(
         null
     }
 
-    data class EpisodeArt(val url: String, val showName: String)
+    data class EpisodeArt(val url: String, val showName: String, val season: Int? = null, val number: Int? = null)
 
     /** The episode's own still plus the SHOW it belongs to (the row is renamed with it). */
     suspend fun episodeResolve(item: ContinueItem): EpisodeArt? = try {
         resolveUrl(item)                                   // finds and remembers the show
-        val id = prefs.getInt("s:" + item.key, -1).takeIf { it > 0 }
+        val id = prefs.getInt("s2:" + item.key, -1).takeIf { it > 0 }
         val show = id?.let { sources.tvmaze.show(it) }
-        BackdropMatch.episodeImage(show, item.name, item.season, item.episode)?.let { url ->
-            EpisodeArt(url, show?.str("name").orEmpty())
+        // After a rename the display name is the SHOW; the episode's own name lives in the subtitle.
+        val epName = item.subtitle?.trim()?.takeIf { it.isNotEmpty() } ?: item.name
+        BackdropMatch.episodeImage(show, epName, item.season, item.episode)?.let { (url, season, number) ->
+            EpisodeArt(url, show?.str("name").orEmpty(), season, number)
         }
     } catch (e: CancellationException) {
         throw e
@@ -124,7 +126,7 @@ class BackdropArt(
         null
     }
 
-    data class CardArt(val url: String, val showName: String? = null)
+    data class CardArt(val url: String, val showName: String? = null, val season: Int? = null, val episode: Int? = null)
 
     /**
      * The whole card-art chain in one call. Episode-named rows ("S2 E14 Bixby's Back" → the
@@ -135,7 +137,7 @@ class BackdropArt(
      */
     suspend fun cardArt(item: ContinueItem, episodeStyle: Boolean): CardArt? {
         if (episodeStyle) {
-            episodeResolve(item)?.let { return CardArt(it.url, it.showName) }
+            episodeResolve(item)?.let { return CardArt(it.url, it.showName, it.season, it.number) }
             showArtUrl(item)?.let { return CardArt(it) }
             imdbArtUrl(item, seriesOnly = true)?.let { return CardArt(it) }
             return null
@@ -145,7 +147,8 @@ class BackdropArt(
 
     private fun dimLevel(): Float = maxOf(dim(), MIN_DIM)
 
-    private fun cacheKey(item: ContinueItem, d: Float) = item.key + "|" + BackdropMatch.norm(item.name) + "|" + item.artKey + "|" + d
+    private fun cacheKey(item: ContinueItem, d: Float) =
+        item.key + "|" + BackdropMatch.norm(item.name) + "|" + BackdropMatch.norm(item.subtitle.orEmpty()) + "|" + item.artKey + "|" + d
 
     private suspend fun prepare(item: ContinueItem, ck: String, d: Float): PreparedBackdrop? {
         val resolved = resolveUrl(item)
@@ -167,8 +170,10 @@ class BackdropArt(
 
     private suspend fun resolveUrl(item: ContinueItem): Pair<String, PreparedBackdrop.Kind>? {
         if (!BackdropMatch.lookupWorthy(item)) return null
-        // u2: bumped once to invalidate lookups made before the episode-name split.
-        val pk = "u2:" + item.key + "|" + BackdropMatch.norm(item.name)
+        // u2: bumped once to invalidate lookups made before the episode-name split. The episode
+        // name (the subtitle) is part of the key: a rename that fills it in starts a fresh lookup
+        // instead of hitting the poster cached under the show's name.
+        val pk = "u2:" + item.key + "|" + BackdropMatch.norm(item.name) + "|" + BackdropMatch.norm(item.subtitle.orEmpty())
         prefs.getString(pk, null)?.let { v ->
             val (stamp, rest) = v.split('\u001F', limit = 2).let { (it[0].toLongOrNull() ?: 0L) to it.getOrElse(1) { "" } }
             if (rest.isNotEmpty()) {
@@ -220,7 +225,7 @@ class BackdropArt(
         }
         // 3. Episode name only (Crunchyroll, or a series name that matched nothing): find the show
         // among candidates we can derive and accept it only when exactly one has that episode.
-        val ep = if (episodeOnly) name else item.subtitle ?: return null
+        val ep = if (episodeOnly) item.subtitle?.trim()?.takeIf { it.isNotEmpty() } ?: name else item.subtitle ?: return null
         val candidates = LinkedHashSet<Int>()
         // s2: bumped once — remembered show ids from the show-by-name era may be wrong shows.
         prefs.getInt("s2:" + item.key, -1).takeIf { it > 0 }?.let { candidates += it }
@@ -473,15 +478,20 @@ object BackdropMatch {
         return hits.singleOrNull()
     }
 
-    /** The still of the episode called [name] (and numbered like it, when known) in [show]'s episode list. */
-    fun episodeImage(show: JsonObject?, name: String, season: Int?, episode: Int?): String? {
+    /**
+     * The still of the episode called [name] (and numbered like it, when known) in [show]'s
+     * episode list, with the episode's real season/number — null when the row has none
+     * (Crunchyroll): the catalog is where the numbers come from.
+     */
+    fun episodeImage(show: JsonObject?, name: String, season: Int?, episode: Int?): Triple<String, Int?, Int?>? {
         val q = norm(name)
         val eps = show?.obj("_embedded")?.arr("episodes").orEmpty().mapNotNull { it as? JsonObject }
         val e = eps.firstOrNull {
             norm(it.str("name").orEmpty()) == q && (episode == null || it.int("number") == episode) && (season == null || it.int("season") == season)
         } ?: return null
         val img = e.obj("image")
-        return img?.str("original") ?: img?.str("medium")
+        val url = img?.str("original") ?: img?.str("medium") ?: return null
+        return Triple(url, e.int("season"), e.int("number"))
     }
 
     /** Background image (main first), else the show's poster. */

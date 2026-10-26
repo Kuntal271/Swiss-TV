@@ -211,9 +211,11 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                         // A resolved show ("VisionQuest" behind "No Strings") renames the row, so
                         // the card and the hero read the series with its episode, not just the name.
                         if (!art.showName.isNullOrBlank() && !art.showName.equals(item.name, ignoreCase = true)) {
-                            watched.setShowIdentity(key, art.showName, item.name, art.url)
+                            watched.setShowIdentity(key, art.showName, item.name, art.url, art.season, art.episode)
                         } else {
                             watched.setShowArt(key, art.url)
+                            // Already renamed: the numbers may still be missing (Crunchyroll).
+                            if (art.season != null && art.episode != null) watched.setEpisodeNumbers(key, art.season!!, art.episode!!)
                         }
                     }
                 }

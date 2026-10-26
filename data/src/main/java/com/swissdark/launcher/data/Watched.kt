@@ -202,6 +202,7 @@ class WatchedStore(
     fun start(): Boolean {
         started = true
         migrateLegacyTitles()
+        dedupeTwins()
         if (watcher.start()) return true
         // Enabled but not bound (an app update unbinds it until the next boot): ask for a rebind;
         // MediaListenerService.onListenerConnected calls start() again.
@@ -270,6 +271,39 @@ class WatchedStore(
         onChanged()
     }
 
+    /** The catalog confirmed this episode's numbers (the row had none, e.g. Crunchyroll). */
+    suspend fun setEpisodeNumbers(key: String, season: Int, episode: Int) = withContext(writer) {
+        val cur = db.dao().get(key) ?: return@withContext
+        if (cur.season == season && cur.episode == episode) return@withContext
+        val next = cur.copy(season = season, episode = episode, series = true)
+        db.dao().put(next); known[key] = next
+        onChanged()
+    }
+
+    /**
+     * The same episode recorded twice (a resolved row plus a later, differently-titled session's
+     * plain row) collapses: a row that only names the episode the way an identified row's episode
+     * is named is its twin and goes. Rows identified themselves are never merged into each other.
+     */
+    private fun dedupeTwins() {
+        scope.launch(writer) {
+            runCatching {
+                val rows = db.dao().recent(KEEP)
+                for (row in rows) {
+                    val title = row.episodeTitle ?: continue
+                    val name = norm(title)
+                    for (other in rows) {
+                        if (other == row || other.pkg != row.pkg || other.episodeTitle != null) continue
+                        if (norm(other.show) == name) {
+                            db.dao().delete(other.key); known.remove(other.key)
+                        }
+                    }
+                }
+                onChanged()
+            }
+        }
+    }
+
     /** The stored online art was wrong (a name-collision): forget it, the row's own art returns. */
     suspend fun clearShowArt(key: String) = withContext(writer) {
         val cur = db.dao().get(key) ?: return@withContext
@@ -284,13 +318,15 @@ class WatchedStore(
      * rename the row to the series, remember the episode name, and take the episode's still
      * as the art. The card then reads "VisionQuest · S1 E1 · No Strings".
      */
-    suspend fun setShowIdentity(key: String, show: String, episodeTitle: String?, artUrl: String?) = withContext(writer) {
+    suspend fun setShowIdentity(key: String, show: String, episodeTitle: String?, artUrl: String?, season: Int? = null, episode: Int? = null) = withContext(writer) {
         val cur = db.dao().get(key) ?: return@withContext
         val next = cur.copy(
             show = show.ifBlank { cur.show },
             displayName = show.ifBlank { cur.displayName ?: cur.show },
             episodeTitle = episodeTitle ?: cur.episodeTitle,
             tmdbArt = artUrl ?: cur.tmdbArt,
+            season = season ?: cur.season,
+            episode = episode ?: cur.episode,
         )
         if (next == cur) return@withContext
         db.dao().put(next); known[key] = next
@@ -443,7 +479,26 @@ class WatchedStore(
 
     private suspend fun record(s: MediaSample, key: String, p: Parsed, art: Bitmap?) {
         val dao = db.dao()
-        val old = dao.get(key)
+        var old = dao.get(key)
+        var key = key
+        // The same episode arrives under different keys as sessions title it differently
+        // ("S1 E1 No Strings" vs a resumed "No Strings"): record into the row that already
+        // carries this episode, so its identity (resolved show, art, numbers) survives.
+        val episodeNamed = p.episodeOnly || s.packageName == CRUNCHYROLL ||
+            (p.episodeTitle == null && p.season != null)
+        if (old == null && episodeNamed) {
+            val name = norm(p.show)
+            val twin = dao.recent(60).firstOrNull { r ->
+                r.pkg == s.packageName && (
+                    (r.episodeTitle != null && norm(r.episodeTitle ?: "") == name) ||
+                        (r.episodeTitle == null && r.season == null && r.episode == null && norm(r.show) == name)
+                    )
+            }
+            if (twin != null) {
+                old = twin; key = twin.key
+                liveKeyByPkg[s.packageName] = key
+            }
+        }
         val sameEpisode = old != null && old.show == p.show && old.episodeTitle == p.episodeTitle && old.episode == p.episode
         // A fresh episode or title starts at the top: nothing watched yet is not worth a card.
         if (s.positionMs < MIN_WATCHED_MS && !sameEpisode) return
@@ -453,11 +508,17 @@ class WatchedStore(
             artKey = if (sameEpisode && old?.art != null) old.art
             else art?.let { saveThumb(key, it) } ?: old?.art?.takeIf { sameEpisode }
         }
+        // A resolved row keeps its identity: the next session sample names the episode again,
+        // but the show/display names were confirmed by the catalog and must not regress.
+        val resolved = old != null && old.episodeTitle != null && p.episodeTitle == null
         val row = WatchedRow(
-            key = key, pkg = s.packageName, show = p.show, episodeTitle = p.episodeTitle,
-            season = p.season ?: old?.season?.takeIf { sameEpisode }, episode = p.episode ?: old?.episode?.takeIf { sameEpisode },
+            key = key, pkg = s.packageName,
+            show = if (resolved) old!!.show else p.show,
+            episodeTitle = if (resolved) old!!.episodeTitle else p.episodeTitle,
+            season = if (resolved) old!!.season else (p.season ?: old?.season?.takeIf { sameEpisode }),
+            episode = if (resolved) old!!.episode else (p.episode ?: old?.episode?.takeIf { sameEpisode }),
             series = p.series || old?.series == true,
-            displayName = (old?.displayName ?: p.show).takeIf { !sameEpisode || old == null } ?: old!!.displayName,
+            displayName = if (resolved) old!!.displayName else p.show,
             // Some players report 0 (or rewind) as they stop: keep the last real position.
             positionMs = if (old != null && sameEpisode && (s.positionMs == 0L || (s.ended && s.positionMs < old.positionMs))) old.positionMs else s.positionMs,
             durationMs = if (s.durationMs > 0) s.durationMs else if (sameEpisode) old?.durationMs ?: 0 else 0,

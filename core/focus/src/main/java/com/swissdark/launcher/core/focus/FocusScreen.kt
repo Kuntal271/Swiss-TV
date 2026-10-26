@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -179,7 +180,9 @@ class FocusScreenState internal constructor(
     /** Scroll back to 0 whenever the focused item is visible there (keeps headings above it whole). */
     var preferTop = false
     var ringOffset = 0f
-    var ringStroke = 4f
+    var ringStroke = 6f
+    /** Corner radius of the focus ring, px. Rounded, not sharp: the owner's call. */
+    var ringRadius = 20f
     var enabled = true
 
     private var okDownAt = -1L
@@ -461,11 +464,12 @@ class FocusScreenState internal constructor(
         val off = ringOffset + ringStroke / 2f
         var st = stroke
         if (st.width != ringStroke) { st = Stroke(width = ringStroke); stroke = st }
-        scope.drawRect(
+        scope.drawRoundRect(
             color = color,
             topLeft = Offset(ringX.floatValue - off, ringY.floatValue - off - if (ringScrolls) scrollY.floatValue else 0f),
             size = Size(ringW.floatValue + off * 2, ringH.floatValue + off * 2),
             style = st,
+            cornerRadius = CornerRadius(ringRadius, ringRadius),
         )
     }
 
