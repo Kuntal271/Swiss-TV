@@ -138,6 +138,7 @@ class PlaybackGate {
 interface WatchedDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(r: WatchedRow)
     @Query("SELECT * FROM watched WHERE `key` = :key") suspend fun get(key: String): WatchedRow?
+    @Query("SELECT * FROM watched WHERE pkg = :pkg AND `key` != :keep") suspend fun otherTitles(pkg: String, keep: String): List<WatchedRow>
     @Query("SELECT * FROM watched ORDER BY updatedAt DESC LIMIT :n") suspend fun recent(n: Int): List<WatchedRow>
     @Query("DELETE FROM watched WHERE `key` = :key") suspend fun delete(key: String)
     @Query("DELETE FROM watched") suspend fun clear(): Int
@@ -386,6 +387,15 @@ class WatchedStore(
         dao.put(row)
         known[key] = row
         if (old == null) dao.trim(KEEP)
+        // An episode-only row replaces the legacy rows that named the whole session title
+        // ("S1 E1 No Strings"), so the same show never shows twice.
+        if (p.episodeOnly && old == null) {
+            for (other in dao.otherTitles(s.packageName, key)) {
+                if (seasonEpisode(other.show) != null) {
+                    dao.delete(other.key); known.remove(other.key)
+                }
+            }
+        }
         // While a title plays, Home is out of sight: tell it on pause/stop and on a new title only.
         if (old == null || !sameEpisode || !s.playing) onChanged()
         if (!row.tmdbTried && !p.episodeOnly && s.packageName != YOUTUBE && s.packageName != CRUNCHYROLL && tmdb.hasKey) matchTmdb(row)

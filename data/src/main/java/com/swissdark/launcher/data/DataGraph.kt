@@ -198,7 +198,9 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                     if (!episodeStyle && !item.artKey.startsWith("banner:")) continue
                     if (!tried.add(item.key + "|" + item.name)) continue
                     launch {
-                        val url = (if (episodeStyle) backdropArt.episodeArtUrl(item) else backdropArt.showArtUrl(item)) ?: return@launch
+                        val url = (if (episodeStyle) backdropArt.episodeArtUrl(item) else backdropArt.showArtUrl(item))
+                            ?: backdropArt.imdbArtUrl(item)
+                            ?: return@launch
                         watched.setShowArt(item.key.removePrefix("w:"), url)
                     }
                 }

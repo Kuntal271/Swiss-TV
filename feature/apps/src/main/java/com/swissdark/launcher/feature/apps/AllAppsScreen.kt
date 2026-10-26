@@ -36,12 +36,15 @@ import com.swissdark.launcher.core.design.Label
 import com.swissdark.launcher.core.design.Swiss
 import com.swissdark.launcher.core.design.SwissType
 import com.swissdark.launcher.core.design.T
+import com.swissdark.launcher.core.design.TDraw
 import com.swissdark.launcher.core.design.TabText
 import com.swissdark.launcher.core.design.rememberMinute
 import com.swissdark.launcher.core.design.topRule
 import com.swissdark.launcher.core.focus.DpadKey
 import com.swissdark.launcher.core.focus.FocusRoot
 import com.swissdark.launcher.core.design.edgeFade
+import com.swissdark.launcher.core.design.focusFill
+import com.swissdark.launcher.core.design.rememberFocusInk
 import com.swissdark.launcher.core.focus.focusScroll
 import com.swissdark.launcher.core.focus.focusViewport
 import com.swissdark.launcher.core.focus.rememberFocusScreen
@@ -251,9 +254,14 @@ fun AllAppsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Label("Jump to", Modifier.weight(1f), color = Swiss.Ink)
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     for ((k, l) in letters.withIndex()) {
-                                        TabText(jump, k, l, false, SwissType.Row28, Swiss.Ink, marker = false)
+                                        // Compact chips: TabText's 10 dp vertical padding makes them
+                                        // taller than the footer band, and the panel edge is what
+                                        // the TV's overscan was cutting off.
+                                        val ink = rememberFocusInk(jump, k)
+                                        val color = remember(ink) { androidx.compose.ui.graphics.ColorProducer { androidx.compose.ui.graphics.lerp(Swiss.Muted, Swiss.Ground, ink.fraction) } }
+                                        TDraw(l, SwissType.Row28, color, Modifier.focusFill(jump, k, ink).padding(horizontal = 12.dp, vertical = 2.dp), maxLines = 1)
                                     }
                                 }
                             }

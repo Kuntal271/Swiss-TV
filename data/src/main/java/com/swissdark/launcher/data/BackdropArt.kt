@@ -110,6 +110,15 @@ class BackdropArt(
         null
     }
 
+    /** IMDb's public suggestions (keyless), the last art fallback. Exact matches only. Never throws. */
+    suspend fun imdbArtUrl(item: ContinueItem): String? = try {
+        ImdbSuggest(http).artUrl(item.name)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
     private fun dimLevel(): Float = maxOf(dim(), MIN_DIM)
 
     private fun cacheKey(item: ContinueItem, d: Float) = item.key + "|" + BackdropMatch.norm(item.name) + "|" + item.artKey + "|" + d
