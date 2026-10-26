@@ -241,6 +241,15 @@ class WatchedStore(
         onChanged()
     }
 
+    /** The stored online art was wrong (a name-collision): forget it, the row's own art returns. */
+    suspend fun clearShowArt(key: String) = withContext(writer) {
+        val cur = db.dao().get(key) ?: return@withContext
+        if (cur.tmdbArt == null) return@withContext
+        val next = cur.copy(tmdbArt = null)
+        db.dao().put(next); known[key] = next
+        onChanged()
+    }
+
     /**
      * The show behind an episode-named row was resolved (web search + TVmaze confirmation):
      * rename the row to the series, remember the episode name, and take the episode's still

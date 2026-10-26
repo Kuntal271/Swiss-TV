@@ -167,7 +167,8 @@ class BackdropArt(
 
     private suspend fun resolveUrl(item: ContinueItem): Pair<String, PreparedBackdrop.Kind>? {
         if (!BackdropMatch.lookupWorthy(item)) return null
-        val pk = "u:" + item.key + "|" + BackdropMatch.norm(item.name)
+        // u2: bumped once to invalidate lookups made before the episode-name split.
+        val pk = "u2:" + item.key + "|" + BackdropMatch.norm(item.name)
         prefs.getString(pk, null)?.let { v ->
             val (stamp, rest) = v.split('\u001F', limit = 2).let { (it[0].toLongOrNull() ?: 0L) to it.getOrElse(1) { "" } }
             if (rest.isNotEmpty()) {
@@ -196,7 +197,11 @@ class BackdropArt(
         }
         val name = item.name.trim()
         val pkg = item.service.packageName
-        val episodeOnly = pkg == CRUNCHYROLL
+        // The name is an EPISODE name, not a show name, when the row has numbering and no
+        // resolved title: a show-by-name search would return unrelated shows that happen to
+        // share the episode's name ("No Strings", ITV/BBC).
+        val episodeOnly = pkg == CRUNCHYROLL ||
+            (item.season != null && item.episode != null && item.title == null)
         // 2. By series / title name: exact normalised match on TVmaze, then OMDb.
         if (!episodeOnly) {
             val hits = sources.tvmaze.searchShows(name).map { it.second }
@@ -217,7 +222,8 @@ class BackdropArt(
         // among candidates we can derive and accept it only when exactly one has that episode.
         val ep = if (episodeOnly) name else item.subtitle ?: return null
         val candidates = LinkedHashSet<Int>()
-        prefs.getInt("s:" + item.key, -1).takeIf { it > 0 }?.let { candidates += it }
+        // s2: bumped once — remembered show ids from the show-by-name era may be wrong shows.
+        prefs.getInt("s2:" + item.key, -1).takeIf { it > 0 }?.let { candidates += it }
         if (sources.omdb.hasKey) {
             val res = runCatching { sources.omdb.searchEpisodes(ep) }.getOrNull()
             for (imdbEp in BackdropMatch.omdbEpisodeIds(res, ep).take(4)) {
@@ -255,7 +261,7 @@ class BackdropArt(
     }
 
     private fun rememberShow(item: ContinueItem, id: Int?) {
-        if (id != null) prefs.edit().putInt("s:" + item.key, id).apply()
+        if (id != null) prefs.edit().putInt("s2:" + item.key, id).apply()
     }
 
     // ---------- decoding ----------

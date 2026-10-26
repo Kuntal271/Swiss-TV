@@ -201,8 +201,13 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
                     if (!episodeStyle && !item.artKey.startsWith("banner:")) continue
                     if (!tried.add(item.key + "|" + item.name)) continue
                     launch {
-                        val art = backdropArt.cardArt(item, episodeStyle) ?: return@launch
                         val key = item.key.removePrefix("w:")
+                        val art = backdropArt.cardArt(item, episodeStyle)
+                        if (art == null) {
+                            // Nothing confident: forget any art a name-collision once stored.
+                            if (episodeStyle) watched.clearShowArt(key)
+                            return@launch
+                        }
                         // A resolved show ("VisionQuest" behind "No Strings") renames the row, so
                         // the card and the hero read the series with its episode, not just the name.
                         if (!art.showName.isNullOrBlank() && !art.showName.equals(item.name, ignoreCase = true)) {
