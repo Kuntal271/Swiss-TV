@@ -418,7 +418,7 @@ class HomeRepositoryImpl(
         val meta = listOfNotNull(svc, se, left?.let { "${duration(it)} left" } ?: ago(now - w.updatedAt)).joinToString(" · ")
         return ContinueItem(
             key = "w:" + w.key, title = WatchedStore.ref(w), service = app.id, serviceName = svc,
-            name = w.show, meta = meta, progress = progress?.takeIf { it > 0f },
+            name = w.displayName ?: w.show, meta = meta, progress = progress?.takeIf { it > 0f },
             // YouTube: the video's own 16:9 thumbnail (found by id) beats the session's small bitmap;
             // Crunchyroll: the episode's own still (found from its name) beats its generic picture.
             artKey = (if (w.pkg == WatchedStore.YOUTUBE || w.pkg == WatchedStore.CRUNCHYROLL) w.tmdbArt ?: w.art else w.art ?: w.tmdbArt) ?: "banner:" + w.pkg,

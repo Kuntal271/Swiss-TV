@@ -57,6 +57,12 @@ data class WatchedRow(
     val tmdbType: String? = null,
     val tmdbArt: String? = null,
     val tmdbTried: Boolean = false,
+    /**
+     * What the UI shows (the card and the hero). Null = [show]. [show] stays the SEARCH name:
+     * what the providers are queried with, so a catalog answer can never overwrite the display
+     * unless the match is confident (setShowIdentity).
+     */
+    val displayName: String? = null,
 ) {
     val finished: Boolean get() = durationMs > 0 && positionMs >= durationMs * 0.95
 
@@ -145,13 +151,21 @@ interface WatchedDao {
     @Query("DELETE FROM watched WHERE `key` NOT IN (SELECT `key` FROM watched ORDER BY updatedAt DESC LIMIT :keep)") suspend fun trim(keep: Int)
 }
 
-@Database(entities = [WatchedRow::class], version = 1, exportSchema = false)
+@Database(entities = [WatchedRow::class], version = 2, exportSchema = false)
 abstract class WatchedDb : RoomDatabase() {
     abstract fun dao(): WatchedDao
 
     companion object {
         fun open(context: Context): WatchedDb =
-            Room.databaseBuilder(context, WatchedDb::class.java, "watched.db").build()
+            Room.databaseBuilder(context, WatchedDb::class.java, "watched.db")
+                .addMigrations(MIGRATION_1_2)
+                .build()
+
+        private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE watched ADD COLUMN displayName TEXT")
+            }
+        }
     }
 }
 
@@ -216,7 +230,7 @@ class WatchedStore(
                     val existing = db.dao().get(newKey)
                     db.dao().delete(row.key); known.remove(row.key)
                     if (existing == null) {
-                        val next = row.copy(key = newKey, show = name, season = s, episode = e)
+                        val next = row.copy(key = newKey, show = name, season = s, episode = e, displayName = name)
                         db.dao().put(next); known[newKey] = next
                     }
                 }
@@ -259,6 +273,7 @@ class WatchedStore(
         val cur = db.dao().get(key) ?: return@withContext
         val next = cur.copy(
             show = show.ifBlank { cur.show },
+            displayName = show.ifBlank { cur.displayName ?: cur.show },
             episodeTitle = episodeTitle ?: cur.episodeTitle,
             tmdbArt = artUrl ?: cur.tmdbArt,
         )
@@ -427,6 +442,7 @@ class WatchedStore(
             key = key, pkg = s.packageName, show = p.show, episodeTitle = p.episodeTitle,
             season = p.season ?: old?.season?.takeIf { sameEpisode }, episode = p.episode ?: old?.episode?.takeIf { sameEpisode },
             series = p.series || old?.series == true,
+            displayName = (old?.displayName ?: p.show).takeIf { !sameEpisode || old == null } ?: old!!.displayName,
             // Some players report 0 (or rewind) as they stop: keep the last real position.
             positionMs = if (old != null && sameEpisode && (s.positionMs == 0L || (s.ended && s.positionMs < old.positionMs))) old.positionMs else s.positionMs,
             durationMs = if (s.durationMs > 0) s.durationMs else if (sameEpisode) old?.durationMs ?: 0 else 0,
