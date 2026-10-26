@@ -191,12 +191,14 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
             home.snapshot.collect { snap ->
                 for (item in snap.upNext) {
                     if (!item.key.startsWith("w:") || item.key.endsWith("|" + WatchedStore.APP_GROUP)) continue
-                    val crunchy = item.service.packageName == WatchedStore.CRUNCHYROLL
-                    if (!crunchy && !item.artKey.startsWith("banner:")) continue
+                    // Crunchyroll and episode-named rows (JioHotstar's "S2 E14 …"): the episode's
+                    // own TVmaze still. Other banner-only cards: the show's art.
+                    val episodeStyle = item.service.packageName == WatchedStore.CRUNCHYROLL ||
+                        (item.title == null && item.season != null && item.episode != null)
+                    if (!episodeStyle && !item.artKey.startsWith("banner:")) continue
                     if (!tried.add(item.key + "|" + item.name)) continue
                     launch {
-                        // Crunchyroll: the episode's own still; others: the show's art.
-                        val url = (if (crunchy) backdropArt.episodeArtUrl(item) else backdropArt.showArtUrl(item)) ?: return@launch
+                        val url = (if (episodeStyle) backdropArt.episodeArtUrl(item) else backdropArt.showArtUrl(item)) ?: return@launch
                         watched.setShowArt(item.key.removePrefix("w:"), url)
                     }
                 }

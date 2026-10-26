@@ -92,7 +92,8 @@ fun Modifier.leftRule(width: Dp = 2.dp, color: Color = Swiss.Rule) = drawBehind 
 @Composable
 fun T(text: String, style: TextStyle, modifier: Modifier = Modifier, color: Color = Color.Unspecified, maxLines: Int = Int.MAX_VALUE, align: TextAlign? = null) {
     val scale = LocalTypeScale.current
-    val scaled = remember(style, scale) { style.atTypeScale(scale) }
+    // At the default scale (the common case) a no-op: no allocation, no remember slot.
+    val scaled = if (scale == 1f) style else style.atTypeScale(scale)
     BasicText(
         text,
         modifier,
@@ -107,7 +108,7 @@ fun T(text: String, style: TextStyle, modifier: Modifier = Modifier, color: Colo
 @Composable
 fun TDraw(text: String, style: TextStyle, color: ColorProducer, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) {
     val scale = LocalTypeScale.current
-    val scaled = remember(style, scale) { style.atTypeScale(scale) }
+    val scaled = if (scale == 1f) style else style.atTypeScale(scale)
     BasicText(text, modifier, style = scaled, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
 }
 

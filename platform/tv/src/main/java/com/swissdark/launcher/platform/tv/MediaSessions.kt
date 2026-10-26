@@ -63,12 +63,18 @@ class MediaSessionWatcher(
     /** What another app is playing right now (Home's chip). Null when nothing is. */
     val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying
 
-    private fun updateNowPlaying() {
-        val t = tracked.values.firstOrNull { t ->
+    private fun updateNowPlaying(hintPkg: String? = null, hintTitle: String? = null) {
+        val playing = tracked.values.firstOrNull { t ->
             runCatching { t.controller.playbackState?.state == PlaybackState.STATE_PLAYING }.getOrDefault(false)
         }
-        _nowPlaying.value = t?.controller?.let { c ->
-            NowPlaying(c.packageName, runCatching { c.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) }.getOrNull())
+        _nowPlaying.value = when {
+            playing == null -> null
+            // The session that just emitted is the freshest: reuse its already-read metadata
+            // instead of another binder call on the main looper.
+            playing.controller.packageName == hintPkg && hintPkg != null -> NowPlaying(hintPkg, hintTitle)
+            else -> playing.controller.let { c ->
+                NowPlaying(c.packageName, runCatching { c.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) }.getOrNull())
+            }
         }
     }
 
@@ -236,11 +242,12 @@ class MediaSessionWatcher(
             t.lastGood = null
             val pos = if (good.playing) good.positionMs + (now - good.atMillis) else good.positionMs
             sink(good.copy(positionMs = if (good.durationMs > 0) minOf(pos, good.durationMs) else pos, playing = false, ended = true, atMillis = now))
+            updateNowPlaying()
             return
         }
         if (sample.title != null) t.lastGood = if (ended) null else sample
         sink(sample)
-        updateNowPlaying()
+        updateNowPlaying(c.packageName, sample.title)
     }
 
     companion object {

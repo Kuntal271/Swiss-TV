@@ -73,8 +73,9 @@ class WeatherStore(
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
-        cached()?.let { _now.value = it }
         scope.launch {
+            // Off main: a small file read plus JSON parse before the first fetch.
+            cached()?.let { _now.value = it }
             while (isActive) {
                 fetchAndStore()
                 delay(30 * 60_000L)

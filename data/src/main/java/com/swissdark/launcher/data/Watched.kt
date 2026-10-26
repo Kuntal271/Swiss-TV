@@ -322,7 +322,11 @@ class WatchedStore(
         try { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { "" }
     }.ifEmpty { pkg }
 
-    private class Parsed(val show: String, val episodeTitle: String?, val season: Int?, val episode: Int?, val series: Boolean) {
+    private class Parsed(
+        val show: String, val episodeTitle: String?, val season: Int?, val episode: Int?, val series: Boolean,
+        /** The show is really an episode name (JioHotstar's "S2 E14 …"): art comes from TVmaze, not TMDB. */
+        val episodeOnly: Boolean = false,
+    ) {
         /** One row per show; apps that only publish the episode name get one row (their latest). */
         var group: String = norm(show)
     }
@@ -341,8 +345,16 @@ class WatchedStore(
                 // Most players put the show in ALBUM (or ARTIST / DISPLAY_SUBTITLE) and the episode in TITLE.
                 val show = listOfNotNull(s.album, s.artist, s.subtitle)
                     .firstOrNull { it != title && !isPlaceholder(it, s.packageName) && seasonEpisode(it) == null }
-                if (show != null) Parsed(show, title, se?.first, se?.second, true)
-                else Parsed(title, null, se?.first, se?.second, se != null)
+                when {
+                    show != null -> Parsed(show, title, se?.first, se?.second, true)
+                    // JioHotstar titles its sessions "S2 E14 Bixby's Back": what follows the numbering
+                    // is the episode name. Like Crunchyroll, one row per app (the latest episode);
+                    // the card's art comes from the TVmaze episode lookup, not TMDB (watchCardArt).
+                    se != null -> episodeName(title)?.let { (season, ep, name) ->
+                        Parsed(name, null, season, ep, true, episodeOnly = true).apply { group = "latest" }
+                    } ?: Parsed(title, null, se.first, se.second, true)
+                    else -> Parsed(title, null, null, null, false)
+                }
             }
         }
     }
@@ -376,7 +388,7 @@ class WatchedStore(
         if (old == null) dao.trim(KEEP)
         // While a title plays, Home is out of sight: tell it on pause/stop and on a new title only.
         if (old == null || !sameEpisode || !s.playing) onChanged()
-        if (!row.tmdbTried && s.packageName != YOUTUBE && s.packageName != CRUNCHYROLL && tmdb.hasKey) matchTmdb(row)
+        if (!row.tmdbTried && !p.episodeOnly && s.packageName != YOUTUBE && s.packageName != CRUNCHYROLL && tmdb.hasKey) matchTmdb(row)
         if (s.packageName == YOUTUBE && youTubeId(row) == null) scope.launch { resolveYouTube(row) }
     }
 
@@ -518,8 +530,12 @@ class WatchedStore(
         if (!recording || candidates.isEmpty()) return
         for ((pkg, use) in candidates) {
             if (use.totalMs < FOREGROUND_WATCH_MS) continue
+            val key = "$pkg|$APP_GROUP"
             val removed = removedAt(pkg)
             if (removed > 0 && use.lastEnd <= removed) continue
+            // Steady state (the row is already as new as this use): skip the writer round-trip.
+            val current = known[key]
+            if (current != null && use.lastEnd <= current.updatedAt) continue
             scope.launch(writer) {
                 try {
                     if (!launchable(pkg)) return@launch
@@ -528,7 +544,6 @@ class WatchedStore(
                     val removedNow = removedAt(pkg)
                     if (removedNow > 0 && use.lastEnd <= removedNow) return@launch
                     val dao = db.dao()
-                    val key = "$pkg|$APP_GROUP"
                     val old = dao.get(key)
                     if (old != null) {
                         if (use.lastEnd <= old.updatedAt) return@launch
@@ -636,6 +651,31 @@ class WatchedStore(
         fun seasonEpisode(s: String): Pair<Int?, Int>? {
             for (r in SE) r.find(s)?.let { m -> return m.groupValues[1].toInt() to m.groupValues[2].toInt() }
             return E_ONLY.find(s)?.let { null to it.groupValues[1].toInt() }
+        }
+
+        private val SE_NAME = Regex(
+            "^\\s*S(?:eason)?\\s*(\\d{1,2})\\s*[·:,.\\-]?\\s*E(?:p(?:isode)?)?\\.??\\s*(\\d{1,4})\\s*[·:,.\\-]?\\s*(.+?)\\s*$",
+            RegexOption.IGNORE_CASE,
+        )
+        private val E_NAME = Regex(
+            "^\\s*E(?:p(?:isode)?)?\\.??\\s*(\\d{1,4})\\s*[·:,.\\-]?\\s*(.+?)\\s*$",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /**
+         * "S2 E14 Bixby's Back" → (2, 14, "Bixby's Back"); "E14 Bixby's Back" → (null, 14, …).
+         * Null when the title does not lead with numbering or the name part is too short to be one.
+         */
+        fun episodeName(title: String): Triple<Int?, Int, String>? {
+            SE_NAME.find(title)?.let { m ->
+                return Triple(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].trim())
+                    .takeIf { it.third.length >= 2 }
+            }
+            E_NAME.find(title)?.let { m ->
+                return Triple(null, m.groupValues[1].toInt(), m.groupValues[2].trim())
+                    .takeIf { it.third.length >= 2 }
+            }
+            return null
         }
 
         fun ref(row: WatchedRow): TitleRef? {
