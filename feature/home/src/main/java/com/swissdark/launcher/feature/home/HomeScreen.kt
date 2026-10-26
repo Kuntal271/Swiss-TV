@@ -276,9 +276,11 @@ fun HomeScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                             CrossfadeText(now.format(Fmt.clock), SwissType.Clock, Modifier.alignByBaseline())
                             Label(now.format(Fmt.longDate), Modifier.alignByBaseline())
-                            if (status.weather.isNotEmpty()) {
-                                T("·  " + status.weather, SwissType.Meta, Modifier.alignByBaseline(), Swiss.Muted, maxLines = 1)
-                            }
+                        }
+                        // Weather on its own line: clock + date fill the six columns, a third
+                        // item on the baseline only ellipsises.
+                        if (status.weather.isNotEmpty()) {
+                            T(status.weather, SwissType.Meta, color = Swiss.Muted, maxLines = 1)
                         }
                         Hero(focus.engine.focused, up, apps, status, now)
                     }
