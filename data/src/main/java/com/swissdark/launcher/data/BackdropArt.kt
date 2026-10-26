@@ -111,12 +111,27 @@ class BackdropArt(
     }
 
     /** IMDb's public suggestions (keyless), the last art fallback. Exact matches only. Never throws. */
-    suspend fun imdbArtUrl(item: ContinueItem): String? = try {
-        ImdbSuggest(http).artUrl(item.name)
+    suspend fun imdbArtUrl(item: ContinueItem, seriesOnly: Boolean = false): String? = try {
+        ImdbSuggest(http).artUrl(item.name, seriesOnly)
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * The whole card-art chain in one call. Episode-named rows ("S2 E14 Bixby's Back" → the
+     * episode's TVmaze still) first; then the stripped name as a possible SHOW name (JioHotstar
+     * titles episodes "S1 E1 <Show>"); then IMDb's exact-match poster, series-only for episodes
+     * (an episode name that equals some film's title is a wrong poster, not art).
+     */
+    suspend fun cardArtUrl(item: ContinueItem, episodeStyle: Boolean): String? {
+        if (episodeStyle) {
+            episodeArtUrl(item)?.let { return it }
+            showArtUrl(item)?.let { return it }
+            return imdbArtUrl(item, seriesOnly = true)
+        }
+        return showArtUrl(item) ?: imdbArtUrl(item)
     }
 
     private fun dimLevel(): Float = maxOf(dim(), MIN_DIM)

@@ -37,11 +37,16 @@ object ImdbSuggestParse {
     /** Kinds that are real films and series (never shorts, games or music videos). */
     val TITLE_KINDS = setOf("movie", "tvSeries", "tvMiniSeries", "tvMovie", "tvSpecial", "podcastSeries")
 
-    /** The first [hits] whose normalised title equals [name] and whose kind is a real title. */
-    fun best(hits: List<Hit>, name: String): Hit? {
+    /**
+     * The first [hits] whose normalised title equals [name] and whose kind is a real title.
+     * [seriesOnly]: an episode-named row must only take a series hit — an episode name that
+     * happens to equal some film's title is a wrong poster, not art.
+     */
+    fun best(hits: List<Hit>, name: String, seriesOnly: Boolean = false): Hit? {
         val q = WatchedStore.norm(name)
         if (q.length < 3) return null
-        return hits.firstOrNull { WatchedStore.norm(it.title) == q && it.kind in TITLE_KINDS }
+        val kinds = if (seriesOnly) setOf("tvSeries", "tvMiniSeries") else TITLE_KINDS
+        return hits.firstOrNull { WatchedStore.norm(it.title) == q && it.kind in kinds }
     }
 }
 
@@ -60,6 +65,6 @@ class ImdbSuggest(private val http: okhttp3.OkHttpClient) {
     }
 
     /** Card art for [name]: the exactly-matching title's poster, else null. Never throws. */
-    suspend fun artUrl(name: String): String? =
-        ImdbSuggestParse.best(search(name), name)?.imageUrl?.takeIf { it.startsWith("http") }
+    suspend fun artUrl(name: String, seriesOnly: Boolean = false): String? =
+        ImdbSuggestParse.best(search(name), name, seriesOnly)?.imageUrl?.takeIf { it.startsWith("http") }
 }
