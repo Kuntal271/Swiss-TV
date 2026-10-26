@@ -52,6 +52,10 @@ data class TitleRef(val tmdbId: Int, val type: MediaType, val name: String)
 @Serializable
 enum class ContinueSource { WATCH_NEXT, HISTORY, APP, WATCHED }
 
+/** What another app is playing right now, for Home's small chip. */
+@Immutable
+data class NowPlaying(val packageName: String, val title: String? = null)
+
 @Immutable
 @Serializable
 data class ContinueItem(

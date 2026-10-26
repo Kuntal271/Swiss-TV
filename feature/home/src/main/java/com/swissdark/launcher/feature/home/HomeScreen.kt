@@ -118,7 +118,17 @@ private const val SYSTEM_SETTINGS = "com.android.tv.settings"
  * Focus order: Continue watching cards, apps, then the four nav buttons in the header.
  */
 @Composable
-fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: HomeStatus, actions: HomeActions, active: Boolean, entrance: Int = 0, backdropArt: (suspend (ContinueItem) -> android.graphics.Bitmap?)? = null) {
+fun HomeScreen(
+    snapshot: HomeSnapshot,
+    wallpaper: PreparedWallpaper,
+    status: HomeStatus,
+    actions: HomeActions,
+    active: Boolean,
+    entrance: Int = 0,
+    backdropArt: (suspend (ContinueItem) -> android.graphics.Bitmap?)? = null,
+    /** "YouTube — Song title" while something plays in another app; information only. */
+    nowPlaying: String? = null,
+) {
     val up = snapshot.upNext
     val apps = remember(snapshot.apps) {
         snapshot.apps.filter { it.pinned || it.id.packageName != SYSTEM_SETTINGS }.take(APP_COLS * APP_ROWS)
@@ -274,9 +284,18 @@ fun HomeScreen(snapshot: HomeSnapshot, wallpaper: PreparedWallpaper, status: Hom
                     }
                     Box(Modifier.fillMaxHeight().weight(1f).padding(bottom = 28.dp), contentAlignment = Alignment.BottomEnd) {
                         // The wallpaper's caption is wrong while a card's art fills the background:
-                        // it fades out and back with the art itself (draw phase).
-                        caption(wallpaper)?.let {
-                            T(it, SwissType.Meta, Modifier.graphicsLayer { alpha = 1f - fade.art() }, maxLines = 1)
+                        // it fades out and back with the art itself (draw phase). Above it, what is
+                        // playing in another app right now (information only, never focusable).
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            nowPlaying?.let { np ->
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Glyph("play", 20.dp, Swiss.Muted)
+                                    T("Now playing · $np", SwissType.Meta, maxLines = 1)
+                                }
+                            }
+                            caption(wallpaper)?.let {
+                                T(it, SwissType.Meta, Modifier.graphicsLayer { alpha = 1f - fade.art() }, maxLines = 1)
+                            }
                         }
                     }
                 }

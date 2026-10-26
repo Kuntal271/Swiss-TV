@@ -95,6 +95,14 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
     val network by g.status.network.collectAsState()
     val isHome by g.status.isHomeApp.collectAsState()
     val weatherNow by g.weather.now.collectAsState()
+    val nowPlaying by g.watched.nowPlaying.collectAsState()
+    val appsAll by g.apps.apps.collectAsState()
+    val nowPlayingText = remember(nowPlaying, appsAll) {
+        nowPlaying?.let { np ->
+            val app = appsAll.firstOrNull { a -> a.id.packageName == np.packageName }?.label ?: np.packageName
+            listOfNotNull(app, np.title?.takeIf { it.isNotBlank() }).joinToString(" — ").takeIf { it.isNotBlank() }
+        }
+    }
     val top = routes.last()
     var message by remember { mutableStateOf<String?>(null) }
     // How long the message stays (ms); the undo prompt for a removed card stays 5 s.
@@ -244,6 +252,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                 active = top == Route.Home,
                 entrance = homeEntrance,
                 backdropArt = remember { { item -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { g.backdropArt.bitmapFor(item) } } },
+                nowPlaying = nowPlayingText,
             )
         }
 

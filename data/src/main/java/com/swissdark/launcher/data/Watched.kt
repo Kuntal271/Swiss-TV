@@ -20,6 +20,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.swissdark.launcher.domain.ForegroundWatch
 import com.swissdark.launcher.domain.MediaType
+import com.swissdark.launcher.domain.NowPlaying
 import com.swissdark.launcher.domain.SearchHit
 import com.swissdark.launcher.domain.TitleRef
 import com.swissdark.launcher.platform.tv.LaunchAdapter
@@ -28,6 +29,7 @@ import com.swissdark.launcher.platform.tv.MediaSessionWatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -176,6 +178,9 @@ class WatchedStore(
     private val watcher by lazy { MediaSessionWatcher(context, listener) { onSample(it) } }
 
     val status: String get() = if (started) watcher.status else "not started"
+
+    /** What another app is playing right now (Home's chip; null when nothing is). */
+    val nowPlaying: StateFlow<NowPlaying?> get() = watcher.nowPlaying
     @Volatile private var started = false
 
     /** Main thread. Idempotent; false until setup.sh has enabled the notification listener. */

@@ -12,6 +12,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.swissdark.launcher.domain.NowPlaying
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * One reading of another app's media session: what is playing and how far in.
@@ -54,6 +57,20 @@ class MediaSessionWatcher(
         private set
     @Volatile var status: String = "not started"
         private set
+
+    private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
+
+    /** What another app is playing right now (Home's chip). Null when nothing is. */
+    val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying
+
+    private fun updateNowPlaying() {
+        val t = tracked.values.firstOrNull { t ->
+            runCatching { t.controller.playbackState?.state == PlaybackState.STATE_PLAYING }.getOrDefault(false)
+        }
+        _nowPlaying.value = t?.controller?.let { c ->
+            NowPlaying(c.packageName, runCatching { c.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) }.getOrNull())
+        }
+    }
 
     private data class SessionKey(val pkg: String, val token: Any)
 
@@ -165,6 +182,7 @@ class MediaSessionWatcher(
         for ((k, t) in tracked.entries.toList()) {
             if (k !in keep) { emit(t, ended = true); untrack(t) }
         }
+        updateNowPlaying()
     }
 
     private fun untrack(t: Tracked) {
@@ -172,6 +190,7 @@ class MediaSessionWatcher(
         main.removeCallbacks(t.pending)
         try { t.controller.unregisterCallback(t) } catch (_: Exception) {}
         tracked.entries.removeAll { it.value === t }
+        updateNowPlaying()
     }
 
     private fun emit(t: Tracked, ended: Boolean) {
@@ -221,6 +240,7 @@ class MediaSessionWatcher(
         }
         if (sample.title != null) t.lastGood = if (ended) null else sample
         sink(sample)
+        updateNowPlaying()
     }
 
     companion object {
