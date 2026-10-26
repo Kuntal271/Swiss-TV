@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screensaver</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;800&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#EDEDED}a:hover{color:#F2C230}
+</style>
+</helmet>
+<div style="position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #0A0A0B; color: #EDEDED; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">
+<img src="/_blob/90a0cfdbb3683d289349799e27ed0342" alt="Wallpaper — Milky Way over a forest lake" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover">
+<div style="position: relative; height: 100%; box-sizing: border-box; padding: 88px 120px; display: flex; flex-direction: column; justify-content: flex-end; gap: 24px">
+<p style="margin: 0; font-size: 320px; font-weight: 800; line-height: 0.8; letter-spacing: -14px">23:30</p>
+<div style="display: flex; gap: 64px; border-top: 2px solid #EDEDED; padding-top: 18px; font-size: 22px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px">
+<span>Sunday 25 October</span><span style="color: #9C9CA3">Milky Way lake · 4K</span><span style="margin-left: auto; color: #9C9CA3">Any button wakes</span>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return { dim: this.props.dim ?? 0.35 };
+}
+}
+</script>
+</body>
+</html>

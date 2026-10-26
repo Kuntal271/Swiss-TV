@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Swiss Home nav options</title>
+<style>
+@font-face{font-family:Inter;src:url(fonts/Inter.ttf);font-weight:100 900}
+:root{--ground:#0A0A0B;--panel:#141416;--rule:#2E2E33;--ink:#EDEDED;--focus:#F2C230;--muted:#9C9CA3;--tile:rgba(20,20,22,.82)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--ground);color:var(--ink);font-family:Inter;font-feature-settings:"cv05","cv08";font-optical-sizing:auto}
+body{padding:56px 120px;background:radial-gradient(1200px 700px at 70% 70%,#1d1d22 0%,#0A0A0B 70%)}
+.opt{border-top:1px solid var(--rule);padding:22px 0 26px;display:flex;align-items:center;gap:40px}
+.tag{width:520px;flex:none}
+.tag b{display:block;font-size:22px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--focus)}
+.tag span{display:block;font-size:22px;color:var(--muted);margin-top:8px;line-height:1.35}
+.row{display:flex;align-items:center;gap:8px}
+.l{font-size:24px;font-weight:500;padding:0 24px;height:56px;display:flex;align-items:center;gap:12px;color:var(--ink)}
+.l svg{width:28px;height:28px;stroke:currentColor;fill:none;stroke-width:2}
+/* A current */
+.a .l{padding:0;margin-right:40px}
+.a .l.f{color:var(--focus);font-weight:700;text-decoration:underline;text-underline-offset:10px;text-decoration-thickness:3px}
+/* B inverse fill */
+.b .l.f{background:var(--focus);color:#0A0A0B;transform:scale(1.04)}
+/* C tile-like chips with ring */
+.c .l{background:var(--tile);border:1px solid var(--rule)}
+.c .l.f{outline:4px solid var(--focus);outline-offset:6px;transform:scale(1.04)}
+/* D icon-only + label on focus */
+.d .l{width:72px;justify-content:center;padding:0}
+.d .l span{display:none}
+.d .l.f{width:auto;padding:0 24px;background:var(--focus);color:#0A0A0B}
+.d .l.f span{display:inline}
+/* QS */
+.seg{display:flex;gap:8px;align-items:center}
+.seg .l{font-size:30px;font-weight:600;color:var(--muted);height:64px;position:relative}
+.seg .l.sel{color:var(--ink)}
+.seg .l.sel::before{content:"";width:10px;height:10px;background:currentColor;display:inline-block;margin-right:2px}
+.seg .l.f{background:var(--focus);color:#0A0A0B;transform:scale(1.04)}
+.rowlab{font-size:22px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);width:200px;font-weight:500}
+.list{width:760px}
+.li{display:flex;justify-content:space-between;align-items:center;height:72px;padding:0 24px;border-bottom:1px solid var(--rule);font-size:32px;font-weight:700}
+.li small{font-size:22px;font-weight:500;color:var(--muted)}
+.li.f{background:var(--focus);color:#0A0A0B;border-color:transparent;transform:scale(1.02)}
+.li.f small{color:#0A0A0B;opacity:.75}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute"><defs>
+<g id="s"><circle cx="10" cy="10" r="7"/><path d="M15 15l6 6"/></g>
+<g id="g"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></g>
+<g id="i"><rect x="3" y="5" width="18" height="12"/><path d="M8 21h8M12 17v4"/></g>
+<g id="t"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></g>
+</defs></svg>
+<script>
+const items=[['s','Search'],['g','All apps'],['i','Inputs'],['t','Settings']];
+function nav(cls,f){return `<div class="row ${cls}">`+items.map((x,k)=>`<div class="l${k==f?' f':''}"><svg viewBox="0 0 24 24"><use href="#${x[0]}"/></svg><span>${x[1]}</span></div>`).join('')+'</div>'}
+function navNoIcon(cls,f){return `<div class="row ${cls}">`+items.map((x,k)=>`<div class="l${k==f?' f':''}">${x[1]}</div>`).join('')+'</div>'}
+document.body.insertAdjacentHTML('beforeend',`
+<div class="opt"><div class="tag"><b>A · Current</b><span>Bold + underline. Same colour change as unfocused text; weight change shifts width; easy to miss at 3 m.</span></div>${navNoIcon('a',0)}</div>
+<div class="opt"><div class="tag"><b>B · Recommended: inverse fill chip</b><span>Icon + label. Focus = solid #F2C230 block, #0A0A0B text, scale 1.04. Square corners. Same "yellow = focus" as tile ring.</span></div>${nav('b',0)}</div>
+<div class="opt"><div class="tag"><b>C · Tile chips + ring</b><span>Chips look like mini tiles; focus is the same 4 px ring. Most consistent, but adds 4 boxes of chrome.</span></div>${nav('c',1)}</div>
+<div class="opt"><div class="tag"><b>D · Icon rail, label on focus</b><span>Google TV / tvOS-style compact. Saves width but hides labels; worse discoverability.</span></div>${nav('d',2)}</div>
+<div class="opt"><div class="tag"><b>Segmented (Quick settings)</b><span>Selected = ink + square marker. Focused = yellow fill. Both visible at once, never confused.</span></div><div class="seg"><div class="rowlab">Picture</div><div class="l">Movie</div><div class="l sel">Standard</div><div class="l f">Vivid</div><div class="l">Game</div></div></div>
+<div class="opt"><div class="tag"><b>List rows (Inputs, settings)</b><span>Full-width yellow row, black text. Replaces "yellow text + line above".</span></div><div class="list"><div class="li f">HDMI 1 <small>Standby</small></div><div class="li">HDMI 2 <small>Connected</small></div></div></div>
+`);
+</script>
+</body></html>

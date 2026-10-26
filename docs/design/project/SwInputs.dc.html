@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inputs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;800&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#EDEDED}a:hover{color:#F2C230}
+</style>
+</helmet>
+<div style="position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #0A0A0B; color: #EDEDED; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; display: grid; grid-template-columns: 1fr 760px">
+<div aria-hidden="true" style="position: relative; overflow: hidden">
+<img src="/_blob/a2c1212fa9baba7ced4dc7d8277dc901" alt="" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover">
+<div style="position: absolute; inset: 0; background: #000000; opacity: 0.6"></div>
+<p style="position: absolute; left: 120px; bottom: 120px; margin: 0; font-size: 160px; font-weight: 800; line-height: 0.85; letter-spacing: -6px; color: #6E6E75">21:46</p>
+</div>
+<aside aria-label="Inputs" style="background: #141416; border-left: 2px solid #2E2E33; box-sizing: border-box; padding: 72px 72px; display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #2E2E33; padding-bottom: 18px; font-size: 22px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px">
+<span style="color: #EDEDED">Input</span><span style="color: #F2C230">Now · HDMI 1</span>
+</div>
+<h1 style="margin: 0; font-size: 110px; font-weight: 800; line-height: 0.85; letter-spacing: -4px">Watch<br>from</h1>
+<div style="display: flex; flex-direction: column"><button style="display: grid; grid-template-columns: 1fr auto; align-items: baseline; border: none; border-top: 4px solid #F2C230; background: transparent; color: #F2C230; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; text-align: left; padding: 22px 0; cursor: pointer"><span style="font-size: 44px; font-weight: 800">HDMI 1</span><span style="font-size: 22px; font-weight: 500; color: #F2C230">[Console] · On</span></button><button style="display: grid; grid-template-columns: 1fr auto; align-items: baseline; border: none; border-top: 2px solid #2E2E33; background: transparent; color: #EDEDED; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; text-align: left; padding: 22px 0; cursor: pointer"><span style="font-size: 44px; font-weight: 800">HDMI 2</span><span style="font-size: 22px; font-weight: 500; color: #9C9CA3">eARC · [Soundbar]</span></button><button style="display: grid; grid-template-columns: 1fr auto; align-items: baseline; border: none; border-top: 2px solid #2E2E33; background: transparent; color: #EDEDED; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; text-align: left; padding: 22px 0; cursor: pointer"><span style="font-size: 44px; font-weight: 800">HDMI 3</span><span style="font-size: 22px; font-weight: 500; color: #9C9CA3">Nothing connected</span></button><button style="display: grid; grid-template-columns: 1fr auto; align-items: baseline; border: none; border-top: 2px solid #2E2E33; border-bottom: 2px solid #2E2E33; background: transparent; color: #EDEDED; font-family: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; text-align: left; padding: 22px 0; cursor: pointer"><span style="font-size: 44px; font-weight: 800">TV</span><span style="font-size: 22px; font-weight: 500; color: #9C9CA3">Antenna</span></button></div>
+<p style="margin: auto 0 0; font-size: 22px; line-height: 1.5; color: #9C9CA3">Names come from HDMI-CEC. Switching runs through TCL’s own TV app, which stays installed.</p>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+renderVals() {
+return { dim: this.props.dim ?? 0.35 };
+}
+}
+</script>
+</body>
+</html>

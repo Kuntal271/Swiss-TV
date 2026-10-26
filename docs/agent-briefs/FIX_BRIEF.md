@@ -1,0 +1,6 @@
+# Day-2 fix round brief
+Read AGENT_BRIEF.md first (same folder) and obey the HARD SAFETY RULE, the no-power rule and the TV lock (sessions <= 4 min, release always, leave TV on Home). D-pad over adb: `adb shell input dpad keyevent KEYCODE_DPAD_*`. Check mResumedActivity before every key.
+Code: /Users/kuntal/swiss-tv-launcher, branch wip-fixes-1025 (already contains a written-but-UNVERIFIED fix round; your job is to VERIFY each item on the real TV, fix what's wrong, and prove it with a screenshot/log). Several agents edit DISJOINT files at once: stay inside your files; do not commit (the lead commits). If a compile error is in a file you don't own, wait and retry.
+Installing: allowed, under the TV lock only, from a full `./gradlew -q :app:assembleRelease` then
+`adb install -r app/build/outputs/apk/release/app-release.apk && adb shell cmd package compile -m speed -f com.swissdark.launcher`, then start HOME. Never uninstall. Never run the DEBUG_SCREEN_OFF broadcast unless your scope says so. Continue watching may be empty on the TV: you cannot play real content, so verify card logic with unit tests and, where possible, by what logcat/dumpsys shows; say plainly what could not be verified on-device.
+Final report (<= 25 lines): per item: fixed+verified / fixed, unverified (why) / not fixed (why); files changed; remaining risks. Be factual.
