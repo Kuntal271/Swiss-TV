@@ -37,6 +37,8 @@ letter bar: pick a letter, OK jumps to it.
 - **Panels** — Inputs (HDMI), Quick settings, Launcher settings (comfort text size, weather city).
 - **Now-playing chip**, letter jump in All apps, Restart (restarts the launcher) and
   Power off (device-admin `lockNow()`, same as the remote's power key) from the header.
+- **OTA self-updates** — the launcher checks its own GitHub Releases feed (silently, daily) and
+  installs a newer build itself, no adb needed: Settings → About → Check for updates.
 
 ## ADB helper hooks (all DUMP-protected: shell only, apps cannot send them)
 ```
