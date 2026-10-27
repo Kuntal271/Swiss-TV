@@ -23,7 +23,37 @@ sets the screensaver, disables only the chosen `BLOAT`, compiles speed-profile, 
 
 ## Remote
 Up/Down/Left/Right move focus · OK opens · Hold OK: remove a card / pin, hide, move an app ·
-Home footer links: Search, All apps, Inputs, Settings · Input key → Inputs · Settings key → Quick settings.
+Home footer links: Search, All apps, Inputs, Settings, then icon-only Restart and Power off ·
+Input key → Inputs · Settings key → Quick settings. In All apps, Up on the top row opens the
+letter bar: pick a letter, OK jumps to it.
+
+## What the launcher does
+- **Home** — clock, date, live weather (open-meteo), wallpaper + focus backdrops, Continue
+  watching, Apps by habit, all driven by one array focus engine (no recomposition per key).
+- **Continue watching** — per-app rows with position and progress; episode rows resolve to their
+  series (name, numbers, artwork) through TVmaze → OMDb → TMDB → IMDb, confirmed by episode name
+  and numbers before anything is shown; a wrong-show name collision can never overwrite the card.
+- **Search** — local catalog and YouTube, TMDB title pages, where-to-watch.
+- **Panels** — Inputs (HDMI), Quick settings, Launcher settings (comfort text size, weather city).
+- **Now-playing chip**, letter jump in All apps, Restart (restarts the launcher) and
+  Power off (device-admin `lockNow()`, same as the remote's power key) from the header.
+
+## ADB helper hooks (all DUMP-protected: shell only, apps cannot send them)
+```
+am broadcast -a com.swissdark.launcher.CONFIG       --es tmdb_key <key> --es omdb_key <key> --es services netflix,prime
+am broadcast -a com.swissdark.launcher.RENAME_SHOW  --es key 'in.startv.hotstar|latest' --es show 'VisionQuest'
+am broadcast -a com.swissdark.launcher.WATCHED_DUMP                      # rows → logcat -s WatchedDump
+am broadcast -a com.swissdark.launcher.DEBUG_SCREEN_OFF                  # clear Continue as on standby
+am broadcast -a com.swissdark.launcher.DEBUG_SEED   --ez remove true     # demo cards on/off
+```
+`RENAME_SHOW` names the series for a row the catalogs cannot resolve (very new shows); the
+automatic chain picks such titles up on its own once the web indexes them (~24 h).
+
+## Repository map
+`HANDOVER.md` (what is done, what is left, TV commands) · `docs/HLD-LLD.md` ·
+`docs/design/project/*.dc.html` (the design the app must match) · `docs/agent-briefs/`
+(safety rules and test commands) · `docs/IMPL-2026-10-26.md` (feature round) ·
+`docs/tools/ring.py` (screenshot focus checks).
 
 ## Gates
 `./gradlew :data:testReleaseUnitTest` (local search < 5 ms) ·
