@@ -394,6 +394,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                 is Route.Settings -> {
                     val catalog by g.wallpapers.catalog.collectAsState()
                     val all by g.apps.apps.collectAsState()
+                    val updateLabel by g.updates.label.collectAsState()
                     LauncherSettingsScreen(
                         settings, catalog, all,
                         SettingsInfo(
@@ -418,10 +419,12 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                                 thumbnail = { w, a, b -> g.wallpapers.loadThumbnail(w, a, b) },
                                 rescanWallpapers = { g.wallpapers.refresh() },
                                 back = { activity.pop() },
+                                checkUpdates = { g.updates.ok() },
                             )
                         },
                         active = active,
                         initialSection = r.section,
+                        updateLabel = updateLabel,
                         backTo = if (routes.getOrNull(routes.size - 2) == Route.Quick) "Quick settings" else "Home",
                     )
                 }

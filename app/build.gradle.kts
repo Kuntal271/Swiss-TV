@@ -1,3 +1,6 @@
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 plugins {
@@ -19,8 +22,13 @@ android {
         applicationId = "com.swissdark.launcher"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        // OTA: every build is strictly newer. Minutes since 2026-01-01 UTC; -PversionCode pins it.
+        versionCode = (project.findProperty("versionCode") as String?)
+            ?.toIntOrNull()
+            ?: ((System.currentTimeMillis() / 60000L) - 29453760L).toInt()
+        versionName = DateTimeFormatter.ofPattern("yyyy.MM.dd-HHmm")
+            .withZone(ZoneId.of("UTC"))
+            .format(Instant.now())
         // Optional: a TMDB v3 key baked in at build time. setup.sh can also push one at runtime.
         buildConfigField("String", "TMDB_KEY", "\"${localProps.getProperty("tmdb.key", "")}\"")
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }

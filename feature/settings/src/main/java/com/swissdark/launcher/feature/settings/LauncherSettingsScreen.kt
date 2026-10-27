@@ -102,6 +102,8 @@ class SettingsActions(
     val thumbnail: (Wallpaper, Int, Int) -> Bitmap?,
     val rescanWallpapers: () -> Unit,
     val back: () -> Unit,
+    /** About section: OK checks for an update, or installs the one on offer. */
+    val checkUpdates: () -> Unit = {},
 )
 
 private val sections = listOf("Home", "Wallpaper", "Services", "Apps", "Remote", "About")
@@ -115,6 +117,8 @@ fun LauncherSettingsScreen(
     deviceName: String,
     wallpaper: PreparedWallpaper,
     actions: SettingsActions,
+    /** Live text of the About section's update row. */
+    updateLabel: String = "OK checks",
     active: Boolean,
     initialSection: Int = 1,
     /** Where Back goes ("Home", or "Quick settings" when opened from there). */
@@ -131,7 +135,7 @@ fun LauncherSettingsScreen(
         2 -> servicesSection(settings, actions)
         3 -> appsSection(settings, allApps, actions, info.iconPacks)
         4 -> remoteSection(info)
-        else -> aboutSection(info)
+        else -> aboutSection(info, actions, updateLabel)
     }
     val focus = rememberFocusScreen(sections.size + content.count, initial = initialSection, active = active)
     focus.preferTop = true
@@ -254,7 +258,7 @@ private fun contentCount(s: Int, catalog: List<Wallpaper>, apps: List<AppEntry>)
     1 -> 4 + minOf(catalog.size, 11) + 1 + 2
     2 -> serviceKeys.size + 2
     3 -> apps.size + 2
-    else -> 0
+    else -> 1
 }
 
 private class SectionContent(
@@ -514,9 +518,13 @@ private fun remoteSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
     }
 }
 
-private fun aboutSection(info: SettingsInfo) = SectionContent(0, {}) { _, _ ->
+private fun aboutSection(info: SettingsInfo, a: SettingsActions, updateLabel: String) = SectionContent(
+    count = 1,
+    click = { a.checkUpdates() },
+) { f, base ->
     Column {
         InfoRow("Version", info.version)
+        ValueRow(f, base, "Check for updates", updateLabel)
         InfoRow("Home app", if (info.isHome) "This launcher" else "Not set")
         InfoRow("Usage access (habits)", if (info.usageAccess) "Granted" else "Not granted")
         InfoRow("Titles", info.titleSource, last = true)

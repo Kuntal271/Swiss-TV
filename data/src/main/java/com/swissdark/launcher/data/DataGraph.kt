@@ -77,6 +77,8 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
     /** Home's focus backdrop: art for the focused Continue watching card (see BackdropArt). */
     private val backdropLazy = lazy { BackdropArt(context, tmdb, http, art) { wallpapers.current.value.dim } }
     val backdropArt by backdropLazy
+    /** OTA self-update from GitHub Releases (see Updates). */
+    val updates by lazy { Updates(context, http, scope) }
     val search by lazy { SearchEngineImpl(scope, db.dao(), tmdb, apps, settings) }
     val titles by lazy { TitleRepositoryImpl(scope, db.dao(), tmdb, settings) { refresh(RefreshReason.WATCH_NEXT_CHANGED) } }
     val launcher by lazy { AppLauncherImpl(scope, launchAdapter, habits, settings, apps) { refresh(it) }.also { it.watchedOpener = { u -> watched.open(u) } } }
@@ -247,6 +249,7 @@ class DataGraph(val context: Context, private val bakedTmdbKey: String) {
         watchCardArt()
         wallpapers.start()
         weather.start()
+        updates.maybeAutoCheck()
         refresh(RefreshReason.COLD_START)
         search.rebuildIndex()
         status.checkHome()
