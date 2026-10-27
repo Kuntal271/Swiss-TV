@@ -338,6 +338,8 @@ fun AppTileArt(component: String, glyph: String, modifier: Modifier = Modifier) 
                 img, null,
                 modifier.background(Swiss.Placeholder).graphicsLayer { alpha = if (cached) 1f else fade.value },
                 contentScale = ContentScale.Crop,
+                // Crop from the TOP: posters shown in 16:9 boxes otherwise lose the head.
+                alignment = Alignment.TopCenter,
             )
         }
         missing -> AppGlyphArt(glyph, modifier)
@@ -393,7 +395,7 @@ fun Art(key: String?, width: Int, height: Int, modifier: Modifier = Modifier) {
             val art = LocalAppArt.current
             val pkg = key.removePrefix("banner:")
             val bmp = remember(pkg, width, height) { art?.banner(pkg, width, height)?.asImageBitmap() }
-            if (bmp != null) Image(bmp, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop)
+            if (bmp != null) Image(bmp, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
             else AppGlyphArt(LocalAppGlyph.current(pkg), modifier)
         }
         else -> {
@@ -403,7 +405,7 @@ fun Art(key: String?, width: Int, height: Int, modifier: Modifier = Modifier) {
                 // Network art fades in when it arrives; memory-cache hits draw at once (Coil skips the fade).
                 ImageRequest.Builder(ctx).data(key).size(width, height).crossfade(if (reduce) 0 else Motion.MEDIUM).build()
             }
-            AsyncImage(req, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop)
+            AsyncImage(req, null, modifier.background(Swiss.Placeholder), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
         }
     }
 }

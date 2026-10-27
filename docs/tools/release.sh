@@ -30,4 +30,12 @@ EOF
 echo "== version $VN (code $VC) sha256 $SHA"
 gh release create "$TAG" "$APK#Swiss Home $VN" build/update.json \
   --repo Kuntal271/Swiss-TV --title "Swiss Home $VN" --notes "$NOTES"
-echo "== released $TAG — the TV picks it up on its next check (releases/latest/download/update.json)"
+echo "== released $TAG — waiting for the live feed to serve it…"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  sleep 15
+  LIVE=$(curl -sSL "https://github.com/Kuntal271/Swiss-TV/releases/latest/download/update.json?t=$i" 2>/dev/null | grep -oE '"versionCode": [0-9]+' | grep -oE '[0-9]+')
+  if [ "$LIVE" = "$VC" ]; then echo "== LIVE: the feed now serves versionCode $VC"; exit 0; fi
+  echo "   feed still serves versionCode ${LIVE:-none} (attempt $i)"
+done
+echo "!! WARNING: the feed still serves an older update.json after 3 min — the TV may say up to date for a while."
+exit 1

@@ -124,7 +124,12 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
         scope.launch {
             try {
                 val text = withContext(Dispatchers.IO) {
-                    http.newCall(Request.Builder().url(METADATA).build()).execute().use { r ->
+                    // Never the local HTTP cache, and a buster for GitHub's "latest" edge cache:
+                    // a fresh release can otherwise read as "up to date" for minutes.
+                    val url = METADATA + "?t=" + System.currentTimeMillis() / 1000
+                    http.newCall(
+                        Request.Builder().url(url).cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
+                    ).execute().use { r ->
                         if (!r.isSuccessful) error("HTTP ${r.code}")
                         r.body?.string() ?: error("empty")
                     }
