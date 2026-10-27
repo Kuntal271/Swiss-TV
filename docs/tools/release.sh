@@ -14,7 +14,7 @@ SDK=/opt/homebrew/share/android-commandlinetools
 AAPT=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort | tail -1)
 [ -n "$AAPT" ] || { echo "aapt2 not found under $SDK/build-tools"; exit 1; }
 
-BADGE=$("$AAPT" dump badging "$APK" | head -1)
+BADGE=$("$AAPT" dump badging "$APK" 2>/dev/null)
 VC=$(printf '%s' "$BADGE" | sed -nE "s/.*versionCode='([0-9]+)'.*/\1/p")
 VN=$(printf '%s' "$BADGE" | sed -nE "s/.*versionName='([^']*)'.*/\1/p")
 [ -n "$VC" ] && [ -n "$VN" ] || { echo "could not read version from badging: $BADGE"; exit 1; }
