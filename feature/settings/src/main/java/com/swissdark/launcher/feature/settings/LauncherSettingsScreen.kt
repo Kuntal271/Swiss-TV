@@ -168,8 +168,10 @@ fun LauncherSettingsScreen(
         }
     }
     focus.onEdge = { i, dir ->
-        // RIGHT from a row whose section is not shown yet and whose shown section has nothing to enter.
-        if (dir == DpadKey.RIGHT && i < sections.size && i != section && contentCount(i, catalog, allApps) > 0) {
+        // RIGHT at the edge enters the section's content — including the section already shown:
+        // About sits at the BOTTOM of the section list while its rows render at the TOP of the
+        // pane, so the graph finds no vertically-overlapping neighbour and the move alone dies.
+        if (dir == DpadKey.RIGHT && i < sections.size && contentCount(i, catalog, allApps) > 0) {
             show(i)
             focus.focus(S + entryOf(i, lastIn, allApps))
             true

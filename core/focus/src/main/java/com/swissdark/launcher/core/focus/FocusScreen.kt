@@ -215,6 +215,12 @@ class FocusScreenState internal constructor(
         for (k in live.indices) live[k].reRegister()
     }
 
+    private fun rectOf(i: Int): FloatArray? {
+        if (i < 0 || i >= count) return null
+        val o = i * 4
+        return floatArrayOf(rects[o], rects[o + 1], rects[o + 2], rects[o + 3])
+    }
+
     internal fun attach(node: FocusItemNode) {
         if (!live.contains(node)) live.add(node)
     }

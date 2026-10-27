@@ -58,6 +58,8 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
         data class Available(val meta: Meta) : State
         data class Downloading(val percent: Int) : State
         data object Installing : State
+        /** The firmware wants its own installer dialog; [installer] must start from the foreground. */
+        data class Confirm(val installer: android.content.Intent) : State
         data class Failed(val why: String) : State
     }
 
@@ -81,6 +83,7 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
         is State.Available -> "${s.meta.versionName} · OK installs"
         is State.Downloading -> "Downloading ${s.percent}%"
         is State.Installing -> "Installing…"
+        is State.Confirm -> "Confirm · OK installs"
         is State.Failed -> "Failed · OK retries"
     }
 
@@ -93,6 +96,10 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
     fun ok() {
         when (val s = mutable.value) {
             is State.Available -> install(s.meta)
+            // The TV's installer refuses background starts: open its dialog from this click.
+            is State.Confirm -> runCatching {
+                context.startActivity(s.installer.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure { mutable.value = State.Failed(it.message?.take(60) ?: "installer refused") }
             else -> check(manual = true)
         }
     }
@@ -186,7 +193,8 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
         if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         val sessionId = pi.createSession(params)
         val session = pi.openSession(sessionId)
-        context.registerReceiver(receiver, IntentFilter(ACTION_STATUS))
+        // RECEIVER_NOT_EXPORTED is required from targetSdk 34; unknown on older platforms, where it is ignored.
+        context.registerReceiver(receiver, IntentFilter(ACTION_STATUS), Context.RECEIVER_NOT_EXPORTED)
         val callback = PendingIntent.getBroadcast(
             context, sessionId,
             Intent(ACTION_STATUS).setPackage(context.packageName).putExtra("session", sessionId),
@@ -197,6 +205,11 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
             session.fsync(out)
         }
         session.commit(callback.intentSender)
+        // No status within 25 s: the session died somewhere this TV does not report.
+        scope.launch {
+            kotlinx.coroutines.delay(25_000)
+            if (mutable.value is State.Installing) mutable.value = State.Failed("installer did not answer")
+        }
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -204,11 +217,13 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
             runCatching { c.unregisterReceiver(this) }
             when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                    // The firmware wants the confirmation dialog after all: bring it up.
+                    // The firmware wants its own confirmation dialog. A background start from a
+                    // receiver is canceled on this TV: hand the intent to the settings row, whose
+                    // OK press starts it from the foreground.
                     val inner = if (Build.VERSION.SDK_INT >= 33)
                         i.getParcelableExtra(Intent.EXTRA_INTENT, android.content.Intent::class.java)
                     else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_INTENT)
-                    inner?.let { runCatching { c.startActivity(it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+                    mutable.value = inner?.let { State.Confirm(it) } ?: State.Failed("installer gave no intent")
                 }
                 PackageInstaller.STATUS_SUCCESS -> mutable.value = State.Installing
                 else -> {
