@@ -45,6 +45,11 @@
     <!-- Granted by setup.sh so the Home fallback can turn itself back on after an update. -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
+    <!-- OTA self-update: the launcher installs newer builds of itself. Consent granted via
+         setup.sh (appops REQUEST_INSTALL_PACKAGES allow); without this declaration the system
+         installer refuses to act on the session and it hangs in "pending user action". -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:name=".LauncherApp"
         android:allowBackup="false"
