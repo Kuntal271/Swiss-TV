@@ -419,7 +419,7 @@ fun AppRoot(g: DataGraph, routes: SnapshotStateList<Route>, activity: MainActivi
                                 thumbnail = { w, a, b -> g.wallpapers.loadThumbnail(w, a, b) },
                                 rescanWallpapers = { g.wallpapers.refresh() },
                                 back = { activity.pop() },
-                                checkUpdates = { g.updates.ok() },
+                                checkUpdates = { g.updates.ok(activity) },
                             )
                         },
                         active = active,

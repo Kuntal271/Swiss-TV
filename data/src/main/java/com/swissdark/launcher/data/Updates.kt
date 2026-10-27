@@ -92,14 +92,21 @@ class Updates(private val context: Context, private val http: OkHttpClient, priv
             if (Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else it.versionCode
         }
 
-    /** OK on the row: an offer installs, anything else checks first. */
-    fun ok() {
+    /**
+     * OK on the row: an offer installs, anything else checks first. [activity] — the screen the
+     * OK was pressed on: this TV's app-start policy cancels activity starts that are not backed
+     * by a user interaction, so the installer's dialog must be opened from the visible Activity,
+     * not from the application context.
+     */
+    fun ok(activity: android.app.Activity? = null) {
         when (val s = mutable.value) {
             is State.Available -> install(s.meta)
-            // The TV's installer refuses background starts: open its dialog from this click.
-            is State.Confirm -> runCatching {
-                context.startActivity(s.installer.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-            }.onFailure { mutable.value = State.Failed(it.message?.take(60) ?: "installer refused") }
+            is State.Confirm -> {
+                val intent = s.installer.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching {
+                    if (activity != null) activity.startActivity(intent) else context.startActivity(intent)
+                }.onFailure { mutable.value = State.Failed(it.message?.take(60) ?: "installer refused") }
+            }
             else -> check(manual = true)
         }
     }
