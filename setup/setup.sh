@@ -59,6 +59,9 @@ ok "installed $(A dumpsys package $PKG | grep -m1 versionName | xargs)"
 
 say "Permissions"
 A appops set "$PKG" GET_USAGE_STATS allow && ok "usage access (habit ranking)"
+# OTA self-update: with this allowed the TV's own installer skips its unknown-sources consent,
+# so a session that wants user action can actually open (and may go fully silent).
+A appops set "$PKG" REQUEST_INSTALL_PACKAGES allow && ok "install consent (OTA updates)" || warn "install consent refused: updates will ask twice"
 A pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null && ok "microphone (voice search)" || warn "microphone grant refused"
 A pm grant "$PKG" android.permission.WRITE_SECURE_SETTINGS 2>/dev/null && ok "secure settings (keeps the Home fallback on across updates)" || warn "secure settings grant refused: re-run setup after each update"
 A pm grant "$PKG" android.permission.ACCESS_FINE_LOCATION 2>/dev/null && ok "location (Wi-Fi name only)" || warn "location grant refused"
